@@ -896,6 +896,8 @@ class _QuotationCreateScreenState extends State<QuotationCreateScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).padding.bottom;
+
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
       appBar: AppBar(
@@ -913,7 +915,7 @@ class _QuotationCreateScreenState extends State<QuotationCreateScreen> {
       body: _loadingQuotation
           ? const Center(child: CircularProgressIndicator())
           : ListView(
-              padding: const EdgeInsets.fromLTRB(14, 14, 14, 18),
+              padding: EdgeInsets.fromLTRB(14, 14, 14, 88 + bottomInset),
               children: [
                 Text(
                   widget.editId != null ? 'Edit Quotation' : 'Create Quotation',

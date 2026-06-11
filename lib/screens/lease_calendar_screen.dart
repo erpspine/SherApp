@@ -1,22 +1,19 @@
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 
-class VehicleAvailabilityScreen extends StatefulWidget {
-  const VehicleAvailabilityScreen({super.key});
+class LeaseCalendarScreen extends StatefulWidget {
+  const LeaseCalendarScreen({super.key});
 
   @override
-  State<VehicleAvailabilityScreen> createState() =>
-      _VehicleAvailabilityScreenState();
+  State<LeaseCalendarScreen> createState() => _LeaseCalendarScreenState();
 }
 
-class _VehicleAvailabilityScreenState extends State<VehicleAvailabilityScreen> {
+class _LeaseCalendarScreenState extends State<LeaseCalendarScreen> {
   bool _loading = true;
   String _error = '';
 
-  List<Map<String, dynamic>> _vehicles = <Map<String, dynamic>>[];
-  Map<String, List<Map<String, dynamic>>> _calendarBookings =
+  Map<String, List<Map<String, dynamic>>> _calendarAllocations =
       <String, List<Map<String, dynamic>>>{};
-
   int _calendarMonth = DateTime.now().month;
   int _calendarYear = DateTime.now().year;
   String _selectedDateKey = '';
@@ -48,128 +45,31 @@ class _VehicleAvailabilityScreenState extends State<VehicleAvailabilityScreen> {
         '/safari-allocations',
       ).catchError((_) => <dynamic>[]);
 
-      final vehicles = vehiclesRaw
-          .whereType<Map>()
-          .map((raw) => Map<String, dynamic>.from(raw))
-          .toList();
-
-      vehicles.sort((a, b) {
-        final left = (a['registration_no'] ?? a['plate_no'] ?? '')
-            .toString()
-            .toLowerCase();
-        final right = (b['registration_no'] ?? b['plate_no'] ?? '')
-            .toString()
-            .toLowerCase();
-        return left.compareTo(right);
-      });
-
-      final calendarBookings = _buildCalendarBookings(
+      final calendarAllocations = _buildCalendarAllocations(
         allocationsRaw,
-        vehicles,
+        vehiclesRaw,
         leadsRaw,
       );
 
       if (!mounted) return;
       setState(() {
-        _vehicles = vehicles;
-        _calendarBookings = calendarBookings;
-
+        _calendarAllocations = calendarAllocations;
         final hasSelection =
             _selectedDateKey.isNotEmpty &&
-            _selectedDateKey.startsWith(
-              '${_calendarYear.toString().padLeft(4, '0')}-${_calendarMonth.toString().padLeft(2, '0')}-',
-            );
+            (_calendarAllocations[_selectedDateKey]?.isNotEmpty ?? false);
         if (!hasSelection) {
           _selectedDateKey =
-              _firstDateInCurrentMonthWithBookings() ?? _selectedDateKey;
+              _firstAllocatedDateInCurrentMonth() ?? _selectedDateKey;
         }
-
         _loading = false;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _loading = false;
         _error = e.toString();
+        _loading = false;
       });
     }
-  }
-
-  Map<String, List<Map<String, dynamic>>> _buildCalendarBookings(
-    List<dynamic> allocations,
-    List<Map<String, dynamic>> vehicles,
-    List<dynamic> leads,
-  ) {
-    final byDate = <String, List<Map<String, dynamic>>>{};
-
-    final vehicleById = <String, Map<String, dynamic>>{
-      for (final vehicle in vehicles) (vehicle['id'] ?? '').toString(): vehicle,
-    };
-
-    final leadById = <String, Map>{
-      for (final item in leads)
-        if (item is Map) (item['id'] ?? '').toString(): item,
-    };
-
-    for (final raw in allocations) {
-      if (raw is! Map) continue;
-
-      final leadId = (raw['lead_id'] ?? raw['leadId'] ?? '').toString();
-      final lead = (raw['lead'] is Map) ? raw['lead'] as Map : leadById[leadId];
-      if (lead == null) continue;
-
-      final start = DateTime.tryParse(
-        (lead['start_date'] ?? lead['startDate'] ?? '').toString(),
-      );
-      final end = DateTime.tryParse(
-        (lead['end_date'] ?? lead['endDate'] ?? '').toString(),
-      );
-      if (start == null || end == null) continue;
-
-      final vehicleId = (raw['vehicle_id'] ?? raw['vehicleId'] ?? '').toString();
-      final nestedVehicle = raw['vehicle'];
-      final vehicle = nestedVehicle is Map
-          ? Map<String, dynamic>.from(nestedVehicle)
-          : vehicleById[vehicleId];
-      if (vehicle == null) continue;
-
-      final nestedDriver = raw['driver'];
-      final driverName = nestedDriver is Map
-          ? (nestedDriver['name'] ?? 'Unknown').toString()
-          : 'Unknown';
-
-      for (
-        DateTime day = DateTime(start.year, start.month, start.day);
-        !day.isAfter(DateTime(end.year, end.month, end.day));
-        day = day.add(const Duration(days: 1))
-      ) {
-        final key = _toDateKey(day);
-        final list = byDate.putIfAbsent(key, () => <Map<String, dynamic>>[]);
-        list.add({
-          'vehicleId': vehicle['id']?.toString() ?? '',
-          'registrationNo':
-              vehicle['registration_no'] ??
-              vehicle['registrationNo'] ??
-              vehicle['plate_no'] ??
-              vehicle['plateNo'] ??
-              'Unknown',
-          'vehicleMake':
-              vehicle['make'] ?? vehicle['vehicle_make'] ?? vehicle['brand'] ?? '',
-          'vehicleModel': vehicle['model'] ?? vehicle['vehicle_model'] ?? '',
-          'status': raw['status'] ?? 'Assigned',
-          'bookingRef': lead['booking_ref'] ?? lead['bookingRef'] ?? '-',
-          'driverName': driverName,
-          'routeParks':
-              lead['route'] ??
-              lead['route_parks'] ??
-              lead['routeParks'] ??
-              lead['destination'] ??
-              '',
-        });
-      }
-    }
-
-    return byDate;
   }
 
   void _previousMonth() {
@@ -181,8 +81,7 @@ class _VehicleAvailabilityScreenState extends State<VehicleAvailabilityScreen> {
         _calendarMonth -= 1;
       }
       _selectedDateKey =
-          _firstDateInCurrentMonthWithBookings() ??
-          _toDateKey(DateTime(_calendarYear, _calendarMonth, 1));
+          _firstAllocatedDateInCurrentMonth() ?? _selectedDateKey;
     });
   }
 
@@ -195,8 +94,7 @@ class _VehicleAvailabilityScreenState extends State<VehicleAvailabilityScreen> {
         _calendarMonth += 1;
       }
       _selectedDateKey =
-          _firstDateInCurrentMonthWithBookings() ??
-          _toDateKey(DateTime(_calendarYear, _calendarMonth, 1));
+          _firstAllocatedDateInCurrentMonth() ?? _selectedDateKey;
     });
   }
 
@@ -218,17 +116,39 @@ class _VehicleAvailabilityScreenState extends State<VehicleAvailabilityScreen> {
     return '${value.year.toString().padLeft(4, '0')}-${value.month.toString().padLeft(2, '0')}-${value.day.toString().padLeft(2, '0')}';
   }
 
-  String? _firstDateInCurrentMonthWithBookings() {
+  String? _firstAllocatedDateInCurrentMonth() {
     final prefix =
         '${_calendarYear.toString().padLeft(4, '0')}-${_calendarMonth.toString().padLeft(2, '0')}-';
     final dates =
-        _calendarBookings.keys.where((key) => key.startsWith(prefix)).toList()
+        _calendarAllocations.keys
+            .where((key) => key.startsWith(prefix))
+            .toList()
           ..sort();
     if (dates.isEmpty) return null;
     return dates.first;
   }
 
-  String _monthLabel(int year, int month) => '${_monthLong(month)} $year';
+  String _monthLabel(int year, int month) {
+    return '${_monthLong(month)} $year';
+  }
+
+  String _monthShort(int month) {
+    const names = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    return names[(month - 1).clamp(0, 11)];
+  }
 
   String _monthLong(int month) {
     const names = [
@@ -249,9 +169,9 @@ class _VehicleAvailabilityScreenState extends State<VehicleAvailabilityScreen> {
   }
 
   String _formatDisplayDate(String dateKey) {
-    final dt = DateTime.tryParse(dateKey);
-    if (dt == null) return dateKey;
-    return '${_monthLong(dt.month)} ${dt.day}, ${dt.year}';
+    final parsed = DateTime.tryParse(dateKey);
+    if (parsed == null) return dateKey;
+    return '${_monthLong(parsed.month)} ${parsed.day}, ${parsed.year}';
   }
 
   Color _statusDotColor(String status) {
@@ -298,20 +218,113 @@ class _VehicleAvailabilityScreenState extends State<VehicleAvailabilityScreen> {
     }
   }
 
-  Widget _bookedVehicleCard(Map<String, dynamic> booking) {
-    final status = (booking['status'] ?? 'Assigned').toString();
+  Map<String, List<Map<String, dynamic>>> _buildCalendarAllocations(
+    List<dynamic> allocations,
+    List<dynamic> vehicles,
+    List<dynamic> leads,
+  ) {
+    final byDate = <String, List<Map<String, dynamic>>>{};
+
+    final vehicleById = <String, Map>{
+      for (final item in vehicles)
+        if (item is Map) (item['id'] ?? '').toString(): item,
+    };
+
+    final leadById = <String, Map>{
+      for (final item in leads)
+        if (item is Map) (item['id'] ?? '').toString(): item,
+    };
+
+    for (final row in allocations) {
+      if (row is! Map) continue;
+
+      final leadId = (row['lead_id'] ?? row['leadId'] ?? '').toString();
+      final lead = (row['lead'] is Map) ? row['lead'] as Map : leadById[leadId];
+      if (lead == null) continue;
+
+      final start = DateTime.tryParse(
+        (lead['start_date'] ?? lead['startDate'] ?? '').toString(),
+      );
+      final end = DateTime.tryParse(
+        (lead['end_date'] ?? lead['endDate'] ?? '').toString(),
+      );
+      if (start == null || end == null) continue;
+
+      final vehicleId = (row['vehicle_id'] ?? row['vehicleId'] ?? '')
+          .toString();
+      final nestedVehicle = row['vehicle'];
+      final vehicle = nestedVehicle is Map
+          ? nestedVehicle
+          : vehicleById[vehicleId];
+
+      final nestedDriver = row['driver'];
+      final driverName = nestedDriver is Map
+          ? (nestedDriver['name'] ?? 'Unknown').toString()
+          : 'Unknown';
+
+      for (
+        DateTime day = DateTime(start.year, start.month, start.day);
+        !day.isAfter(DateTime(end.year, end.month, end.day));
+        day = day.add(const Duration(days: 1))
+      ) {
+        final key = _toDateKey(day);
+        final dayList = byDate.putIfAbsent(key, () => <Map<String, dynamic>>[]);
+        dayList.add({
+          'bookingRef': lead['booking_ref'] ?? lead['bookingRef'] ?? '-',
+          'registrationNo':
+              vehicle?['registration_no'] ??
+              vehicle?['registrationNo'] ??
+              vehicle?['plate_no'] ??
+              vehicle?['plateNo'] ??
+              'Unknown',
+          'vehicleMake':
+              vehicle?['make'] ??
+              vehicle?['vehicle_make'] ??
+              vehicle?['brand'] ??
+              '',
+          'vehicleModel': vehicle?['model'] ?? vehicle?['vehicle_model'] ?? '',
+          'driverName': driverName,
+          'status': row['status'] ?? 'Assigned',
+          'startDate': _toDateKey(start),
+          'endDate': _toDateKey(end),
+          'routeParks':
+              lead['route'] ??
+              lead['route_parks'] ??
+              lead['routeParks'] ??
+              lead['destination'] ??
+              '',
+        });
+      }
+    }
+
+    return byDate;
+  }
+
+  Widget _allocationDetailCard(Map<String, dynamic> alloc) {
+    final bookingRef = (alloc['bookingRef'] ?? '-').toString();
+    final status = (alloc['status'] ?? 'Assigned').toString();
+    final reg = (alloc['registrationNo'] ?? 'Unknown').toString();
+    final driver = (alloc['driverName'] ?? 'Unknown').toString();
+    final route = (alloc['routeParks'] ?? '').toString();
+    final make = (alloc['vehicleMake'] ?? '').toString();
+    final model = (alloc['vehicleModel'] ?? '').toString();
+    final startDate = (alloc['startDate'] ?? '').toString();
+    final endDate = (alloc['endDate'] ?? '').toString();
     final badge = _statusBadgeColors(status);
-    final reg = (booking['registrationNo'] ?? 'Unknown').toString();
-    final make = (booking['vehicleMake'] ?? '').toString();
-    final model = (booking['vehicleModel'] ?? '').toString();
-    final bookingRef = (booking['bookingRef'] ?? '-').toString();
-    final driver = (booking['driverName'] ?? 'Unknown').toString();
-    final route = (booking['routeParks'] ?? '').toString();
     final vehicleLabel = [make, model].where((s) => s.isNotEmpty).join(' ');
+
+    String dateRange = '';
+    if (startDate.isNotEmpty && endDate.isNotEmpty) {
+      final s = DateTime.tryParse(startDate);
+      final e = DateTime.tryParse(endDate);
+      if (s != null && e != null) {
+        dateRange =
+            '${_monthShort(s.month)} ${s.day} – ${_monthShort(e.month)} ${e.day}';
+      }
+    }
 
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: const Color(0xFFE5E8EE)),
@@ -320,133 +333,183 @@ class _VehicleAvailabilityScreenState extends State<VehicleAvailabilityScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              const Icon(Icons.directions_car_outlined, size: 16),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  reg,
-                  style: const TextStyle(
-                    color: Color(0xFF0F1F3D),
-                    fontSize: 14,
-                    fontWeight: FontWeight.w800,
+          Container(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+            decoration: const BoxDecoration(
+              color: Color(0xFFF8F9FC),
+              borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
+              border: Border(bottom: BorderSide(color: Color(0xFFE5E8EE))),
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.tour_outlined,
+                  color: Color(0xFFB88910),
+                  size: 16,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    bookingRef,
+                    style: const TextStyle(
+                      color: Color(0xFF0F1F3D),
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
                 ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-                decoration: BoxDecoration(
-                  color: badge.bg,
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(color: badge.border),
-                ),
-                child: Text(
-                  status,
-                  style: TextStyle(
-                    color: badge.text,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 9,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: badge.bg,
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: badge.border),
+                  ),
+                  child: Text(
+                    status,
+                    style: TextStyle(
+                      color: badge.text,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          if (vehicleLabel.isNotEmpty)
-            Text(
-              vehicleLabel,
-              style: const TextStyle(
-                color: Color(0xFF667085),
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          const SizedBox(height: 4),
-          Text(
-            'Booking: $bookingRef',
-            style: const TextStyle(
-              color: Color(0xFF334155),
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
+              ],
             ),
           ),
-          const SizedBox(height: 2),
-          Text(
-            'Driver: $driver',
-            style: const TextStyle(
-              color: Color(0xFF667085),
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 32,
+                      height: 32,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFECF7FF),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(
+                        Icons.directions_car_outlined,
+                        color: Color(0xFF0E82C2),
+                        size: 16,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            reg,
+                            style: const TextStyle(
+                              color: Color(0xFF101828),
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          if (vehicleLabel.isNotEmpty)
+                            Text(
+                              vehicleLabel,
+                              style: const TextStyle(
+                                color: Color(0xFF667085),
+                                fontSize: 11,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                    if (dateRange.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF0F2F5),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          dateRange,
+                          style: const TextStyle(
+                            color: Color(0xFF475467),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 32,
+                      height: 32,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFEFFAF5),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(
+                        Icons.person_outline_rounded,
+                        color: Color(0xFF0E9F6E),
+                        size: 16,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            driver,
+                            style: const TextStyle(
+                              color: Color(0xFF101828),
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          if (route.isNotEmpty)
+                            Text(
+                              'Route: $route',
+                              style: const TextStyle(
+                                color: Color(0xFF667085),
+                                fontSize: 11,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
-          if (route.isNotEmpty) ...[
-            const SizedBox(height: 2),
-            Text(
-              'Route: $route',
-              style: const TextStyle(
-                color: Color(0xFF667085),
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ],
         ],
-      ),
-    );
-  }
-
-  Widget _freeVehicleChip(Map<String, dynamic> vehicle) {
-    final reg =
-        (vehicle['registration_no'] ?? vehicle['registrationNo'] ?? vehicle['plate_no'] ?? '-')
-            .toString();
-    final make = (vehicle['make'] ?? '').toString();
-    final model = (vehicle['model'] ?? '').toString();
-    final label = [reg, make, model]
-        .where((part) => part.trim().isNotEmpty)
-        .join('  ')
-        .trim();
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: const Color(0xFFECFDF3),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: const Color(0xFF86EFAC)),
-      ),
-      child: Text(
-        label.isEmpty ? 'Vehicle' : label,
-        style: const TextStyle(
-          color: Color(0xFF166534),
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-        ),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    final selectedAllocations =
+        _calendarAllocations[_selectedDateKey] ?? <Map<String, dynamic>>[];
     final days = _calendarDays(_calendarYear, _calendarMonth);
-    final selectedBookings =
-        _calendarBookings[_selectedDateKey] ?? <Map<String, dynamic>>[];
-
-    final bookedVehicleIds = selectedBookings
-        .map((item) => (item['vehicleId'] ?? '').toString())
-        .where((id) => id.isNotEmpty)
-        .toSet();
-
-    final freeVehicles = _vehicles.where((vehicle) {
-      final id = (vehicle['id'] ?? '').toString();
-      return id.isNotEmpty && !bookedVehicleIds.contains(id);
-    }).toList();
 
     return Scaffold(
       appBar: AppBar(
         elevation: 0,
         backgroundColor: Colors.white,
         title: const Text(
-          'Vehicle Availability',
+          'Lease Calendar',
           style: TextStyle(
             color: Color(0xFF0F1F3D),
             fontSize: 18,
@@ -481,7 +544,7 @@ class _VehicleAvailabilityScreenState extends State<VehicleAvailabilityScreen> {
               child: Padding(
                 padding: const EdgeInsets.all(24),
                 child: Text(
-                  'Failed to load availability calendar\n$_error',
+                  'Failed to load lease calendar\n$_error',
                   textAlign: TextAlign.center,
                   style: const TextStyle(color: Color(0xFF667085)),
                 ),
@@ -511,7 +574,7 @@ class _VehicleAvailabilityScreenState extends State<VehicleAvailabilityScreen> {
                                 borderRadius: BorderRadius.circular(10),
                               ),
                               child: const Icon(
-                                Icons.calendar_month_outlined,
+                                Icons.event_available_outlined,
                                 color: Color(0xFFB88910),
                                 size: 20,
                               ),
@@ -522,7 +585,7 @@ class _VehicleAvailabilityScreenState extends State<VehicleAvailabilityScreen> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    'Availability Calendar',
+                                    'Lease Calendar',
                                     style: TextStyle(
                                       color: Color(0xFF0F1F3D),
                                       fontSize: 16,
@@ -530,7 +593,7 @@ class _VehicleAvailabilityScreenState extends State<VehicleAvailabilityScreen> {
                                     ),
                                   ),
                                   Text(
-                                    'View booked and free vehicles by date',
+                                    'Safari vehicle and driver assignments',
                                     style: TextStyle(
                                       color: Color(0xFF667085),
                                       fontSize: 11,
@@ -559,7 +622,9 @@ class _VehicleAvailabilityScreenState extends State<VehicleAvailabilityScreen> {
                               ),
                             ),
                             Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 7),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 7,
+                              ),
                               child: Text(
                                 _monthLabel(_calendarYear, _calendarMonth),
                                 style: const TextStyle(
@@ -620,34 +685,13 @@ class _VehicleAvailabilityScreenState extends State<VehicleAvailabilityScreen> {
                             final dateKey = _toDateKey(
                               DateTime(_calendarYear, _calendarMonth, day),
                             );
-                            final dayBookings =
-                                _calendarBookings[dateKey] ??
+                            final dayAllocs =
+                                _calendarAllocations[dateKey] ??
                                 <Map<String, dynamic>>[];
-                            final bookedVehiclesCount = dayBookings
-                                .map(
-                                  (booking) =>
-                                      (booking['vehicleId'] ?? '').toString(),
-                                )
-                                .where((id) => id.isNotEmpty)
-                                .toSet()
-                                .length;
-                            final freeVehiclesCount =
-                                (_vehicles.length - bookedVehiclesCount)
-                                    .clamp(0, _vehicles.length);
-
                             final isSelected = _selectedDateKey == dateKey;
-                            final isToday = _toDateKey(DateTime.now()) == dateKey;
-
-                            final isFullyBooked =
-                                _vehicles.isNotEmpty &&
-                                bookedVehiclesCount >= _vehicles.length;
-                            final hasSomeBookings = bookedVehiclesCount > 0;
-
-                            final dayColor = isFullyBooked
-                                ? const Color(0xFFE5484D)
-                                : hasSomeBookings
-                                ? const Color(0xFFB88910)
-                                : const Color(0xFF16A34A);
+                            final isToday =
+                                _toDateKey(DateTime.now()) == dateKey;
+                            final hasBookings = dayAllocs.isNotEmpty;
 
                             return GestureDetector(
                               onTap: () =>
@@ -657,14 +701,18 @@ class _VehicleAvailabilityScreenState extends State<VehicleAvailabilityScreen> {
                                 decoration: BoxDecoration(
                                   color: isSelected
                                       ? const Color(0xFF1D4E89)
-                                      : dayColor.withValues(alpha: 0.1),
+                                      : hasBookings
+                                      ? const Color(0xFFEFFBF6)
+                                      : Colors.transparent,
                                   borderRadius: BorderRadius.circular(10),
                                   border: Border.all(
                                     color: isSelected
                                         ? const Color(0xFF1D4E89)
                                         : isToday
                                         ? const Color(0xFFDDB15C)
-                                        : dayColor.withValues(alpha: 0.55),
+                                        : hasBookings
+                                        ? const Color(0xFF6EE7B7)
+                                        : const Color(0xFFE5E8EE),
                                     width: isToday && !isSelected ? 1.5 : 1,
                                   ),
                                 ),
@@ -691,38 +739,55 @@ class _VehicleAvailabilityScreenState extends State<VehicleAvailabilityScreen> {
                                         height: 1,
                                       ),
                                     ),
-                                    Row(
-                                      mainAxisAlignment: MainAxisAlignment.center,
-                                      children: [
-                                        if (hasSomeBookings)
-                                          Container(
-                                            width: 6,
-                                            height: 6,
-                                            decoration: BoxDecoration(
-                                              shape: BoxShape.circle,
-                                              color: isSelected
-                                                  ? Colors.white
-                                                  : const Color(0xFFB88910),
+                                    if (hasBookings)
+                                      Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        children: [
+                                          ...List.generate(
+                                            dayAllocs.length.clamp(0, 3),
+                                            (i) => Container(
+                                              width: 5,
+                                              height: 5,
+                                              margin:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 1,
+                                                  ),
+                                              decoration: BoxDecoration(
+                                                shape: BoxShape.circle,
+                                                color: isSelected
+                                                    ? Colors.white.withValues(
+                                                        alpha: 0.85,
+                                                      )
+                                                    : _statusDotColor(
+                                                        (dayAllocs[i]['status'] ??
+                                                                '')
+                                                            .toString(),
+                                                      ),
+                                              ),
                                             ),
                                           ),
-                                        if (hasSomeBookings &&
-                                            freeVehiclesCount > 0)
-                                          const SizedBox(width: 2),
-                                        if (freeVehiclesCount > 0)
-                                          Container(
-                                            width: 6,
-                                            height: 6,
-                                            decoration: BoxDecoration(
-                                              shape: BoxShape.circle,
-                                              color: isSelected
-                                                  ? Colors.white.withValues(
-                                                      alpha: 0.75,
-                                                    )
-                                                  : const Color(0xFF16A34A),
+                                          if (dayAllocs.length > 3)
+                                            Padding(
+                                              padding: const EdgeInsets.only(
+                                                left: 1,
+                                              ),
+                                              child: Text(
+                                                '+',
+                                                style: TextStyle(
+                                                  color: isSelected
+                                                      ? Colors.white
+                                                      : const Color(0xFF667085),
+                                                  fontSize: 8,
+                                                  fontWeight: FontWeight.w800,
+                                                  height: 1,
+                                                ),
+                                              ),
                                             ),
-                                          ),
-                                      ],
-                                    ),
+                                        ],
+                                      )
+                                    else
+                                      const SizedBox(height: 5),
                                   ],
                                 ),
                               ),
@@ -730,22 +795,25 @@ class _VehicleAvailabilityScreenState extends State<VehicleAvailabilityScreen> {
                           },
                         ),
                         const SizedBox(height: 12),
-                        const Wrap(
+                        Wrap(
                           spacing: 12,
                           runSpacing: 6,
-                          children: [
-                            _CalLegend(color: Color(0xFF16A34A), label: 'Free'),
-                            _CalLegend(
-                              color: Color(0xFFB88910),
-                              label: 'Partially booked',
-                            ),
-                            _CalLegend(
-                              color: Color(0xFFE5484D),
-                              label: 'Fully booked',
-                            ),
+                          children: const [
                             _CalLegend(
                               color: Color(0xFF60A5FA),
-                              label: 'Trip status dots',
+                              label: 'Assigned',
+                            ),
+                            _CalLegend(
+                              color: Color(0xFF34D399),
+                              label: 'Confirmed',
+                            ),
+                            _CalLegend(
+                              color: Color(0xFF818CF8),
+                              label: 'Completed',
+                            ),
+                            _CalLegend(
+                              color: Color(0xFFFB7185),
+                              label: 'Cancelled',
                             ),
                           ],
                         ),
@@ -787,7 +855,7 @@ class _VehicleAvailabilityScreenState extends State<VehicleAvailabilityScreen> {
                                 borderRadius: BorderRadius.circular(999),
                               ),
                               child: Text(
-                                'Booked ${selectedBookings.length} • Free ${freeVehicles.length}',
+                                '${selectedAllocations.length} allocation${selectedAllocations.length == 1 ? '' : 's'}',
                                 style: const TextStyle(
                                   color: Color(0xFF475467),
                                   fontSize: 12,
@@ -798,55 +866,42 @@ class _VehicleAvailabilityScreenState extends State<VehicleAvailabilityScreen> {
                           ],
                         ),
                         const SizedBox(height: 12),
-                        if (selectedBookings.isEmpty)
+                        if (selectedAllocations.isEmpty)
                           const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 12),
-                            child: Text(
-                              'No bookings for this date.',
-                              style: TextStyle(
-                                color: Color(0xFF64748B),
-                                fontSize: 13,
-                                fontWeight: FontWeight.w500,
+                            padding: EdgeInsets.symmetric(vertical: 18),
+                            child: Center(
+                              child: Column(
+                                children: [
+                                  Icon(
+                                    Icons.event_available_outlined,
+                                    color: Color(0xFFCBD5E1),
+                                    size: 36,
+                                  ),
+                                  SizedBox(height: 8),
+                                  Text(
+                                    'No bookings on this date',
+                                    style: TextStyle(
+                                      color: Color(0xFF94A3B8),
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                  SizedBox(height: 4),
+                                  Text(
+                                    'Tap a highlighted date to view allocations',
+                                    style: TextStyle(
+                                      color: Color(0xFFCBD5E1),
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                           )
-                        else ...[
-                          const Text(
-                            'Booked Vehicles',
-                            style: TextStyle(
-                              color: Color(0xFF334155),
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          ...selectedBookings.map(_bookedVehicleCard),
-                        ],
-                        const SizedBox(height: 10),
-                        const Text(
-                          'Free Vehicles',
-                          style: TextStyle(
-                            color: Color(0xFF334155),
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        if (freeVehicles.isEmpty)
-                          const Text(
-                            'No free vehicles on this date.',
-                            style: TextStyle(
-                              color: Color(0xFF64748B),
-                              fontSize: 13,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          )
                         else
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: freeVehicles
-                                .map(_freeVehicleChip)
+                          Column(
+                            children: selectedAllocations
+                                .map(_allocationDetailCard)
                                 .toList(),
                           ),
                       ],

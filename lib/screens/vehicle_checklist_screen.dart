@@ -1484,6 +1484,7 @@ class _CreateChecklistFormState extends State<CreateChecklistForm> {
 
   final _remarksCtrl = TextEditingController();
   final _odometerCtrl = TextEditingController();
+  final _parkingLocationCtrl = TextEditingController();
   final _imagePicker = ImagePicker();
 
   bool get _isEditMode => widget.inspectionId != null;
@@ -1532,6 +1533,13 @@ class _CreateChecklistFormState extends State<CreateChecklistForm> {
 
     final remarks = (initial['remarks'] ?? initial['notes'] ?? '').toString();
     _remarksCtrl.text = remarks;
+    _parkingLocationCtrl.text =
+        (initial['parking_location'] ??
+                initial['parkingLocation'] ??
+                initial['parked_location'] ??
+                initial['parkedLocation'] ??
+                '')
+            .toString();
     _odometerCtrl.text =
         (initial['odometer'] ??
                 initial['odometer_reading'] ??
@@ -1605,6 +1613,7 @@ class _CreateChecklistFormState extends State<CreateChecklistForm> {
   void dispose() {
     _remarksCtrl.dispose();
     _odometerCtrl.dispose();
+    _parkingLocationCtrl.dispose();
     super.dispose();
   }
 
@@ -2443,6 +2452,20 @@ class _CreateChecklistFormState extends State<CreateChecklistForm> {
     final vehicleKey = _vehicleKey(vehicle);
     if (leadKey.isEmpty || vehicleKey.isEmpty) return false;
 
+    if (_checklistType == kPostDepartureChecklistType) {
+      final hasPre = _hasInspectionFor(
+        lead,
+        vehicle,
+        kPreDepartureChecklistType,
+      );
+      final hasPost = _hasInspectionFor(
+        lead,
+        vehicle,
+        kPostDepartureChecklistType,
+      );
+      return !hasPre || hasPost;
+    }
+
     for (final inspection in _existingInspections) {
       if (_inspectionTypeValue(inspection) != _checklistType) continue;
       if (_inspectionLeadKey(inspection) != leadKey) continue;
@@ -2457,6 +2480,49 @@ class _CreateChecklistFormState extends State<CreateChecklistForm> {
     }
 
     return false;
+  }
+
+  bool _hasInspectionFor(
+    Map<String, dynamic> lead,
+    Map<String, dynamic> vehicle,
+    String type,
+  ) {
+    final leadKey = _leadKey(lead);
+    final vehicleKey = _vehicleKey(vehicle);
+    if (leadKey.isEmpty || vehicleKey.isEmpty) return false;
+
+    for (final inspection in _existingInspections) {
+      if (_inspectionTypeValue(inspection) != type) continue;
+      if (_inspectionLeadKey(inspection) != leadKey) continue;
+      if (_inspectionVehicleKey(inspection) != vehicleKey) continue;
+
+      if (_isEditMode &&
+          _inspectionIdValue(inspection) == widget.inspectionId) {
+        continue;
+      }
+
+      return true;
+    }
+
+    return false;
+  }
+
+  bool _canCreatePostForSelection() {
+    final lead = _selectedLead;
+    final vehicle = _selectedVehicle;
+    if (lead == null || vehicle == null) return false;
+
+    if (_isEditMode && _checklistType == kPostDepartureChecklistType) {
+      return true;
+    }
+
+    final hasPre = _hasInspectionFor(lead, vehicle, kPreDepartureChecklistType);
+    final hasPost = _hasInspectionFor(
+      lead,
+      vehicle,
+      kPostDepartureChecklistType,
+    );
+    return hasPre && !hasPost;
   }
 
   String? _selectedLeadKey() {
@@ -2500,7 +2566,36 @@ class _CreateChecklistFormState extends State<CreateChecklistForm> {
   }
 
   List<Map<String, dynamic>> _availableLeadOptions() {
-    return _leadOptions();
+    return _leadOptions().where(_leadHasPendingChecklist).toList();
+  }
+
+  bool _leadHasPendingChecklist(Map<String, dynamic> lead) {
+    final vehicles = _vehiclesFromLead(lead);
+
+    // Keep leads visible when no vehicle can be resolved yet; this avoids
+    // accidentally hiding leads due to partial payloads.
+    if (vehicles.isEmpty) return true;
+
+    for (final vehicle in vehicles) {
+      final hasPre = _hasInspectionFor(
+        lead,
+        vehicle,
+        kPreDepartureChecklistType,
+      );
+      final hasPost = _hasInspectionFor(
+        lead,
+        vehicle,
+        kPostDepartureChecklistType,
+      );
+
+      // If either inspection is missing, this lead still has pending work.
+      if (!hasPre || !hasPost) {
+        return true;
+      }
+    }
+
+    // All vehicles on this lead already completed both pre and post.
+    return false;
   }
 
   String _leadLabel(Map<String, dynamic> lead) {
@@ -2724,6 +2819,14 @@ class _CreateChecklistFormState extends State<CreateChecklistForm> {
       return;
     }
 
+    if (_checklistType == kPostDepartureChecklistType &&
+        !_canCreatePostForSelection()) {
+      await _showValidationMessage(
+        'You must submit the Pre checklist first for this vehicle before creating the Post checklist.',
+      );
+      return;
+    }
+
     if (_items.isEmpty) {
       await _showValidationMessage('No checklist items available to submit');
       return;
@@ -2762,6 +2865,7 @@ class _CreateChecklistFormState extends State<CreateChecklistForm> {
         lead: _selectedLead!,
         vehicle: _selectedVehicle!,
         odometer: _odometerCtrl.text.trim(),
+        parkingLocation: _parkingLocationCtrl.text.trim(),
         items: _items,
         remarks: _remarksCtrl.text,
         imagePaths: _imagePaths,
@@ -2907,6 +3011,10 @@ class _CreateChecklistFormState extends State<CreateChecklistForm> {
                   _sectionHeading(theme, 'Odometer Reading'),
                   const SizedBox(height: 10),
                   _buildOdometerCard(theme),
+                  const SizedBox(height: 22),
+                  _sectionHeading(theme, 'Parking Location'),
+                  const SizedBox(height: 10),
+                  _buildParkingLocationCard(theme),
                   const SizedBox(height: 22),
                   Row(
                     children: [
@@ -3661,6 +3769,16 @@ class _CreateChecklistFormState extends State<CreateChecklistForm> {
     final plate = (vehicle['plate_no'] ?? vehicle['plateNo'] ?? '-').toString();
     final vehicleNo = (vehicle['vehicle_no'] ?? vehicle['vehicleNo'] ?? '')
         .toString();
+    final normalizedPlate = plate.trim().toLowerCase().replaceAll(
+      RegExp(r'[^a-z0-9]'),
+      '',
+    );
+    final normalizedVehicleNo = vehicleNo.trim().toLowerCase().replaceAll(
+      RegExp(r'[^a-z0-9]'),
+      '',
+    );
+    final showVehicleNoChip =
+        vehicleNo.isNotEmpty && normalizedVehicleNo != normalizedPlate;
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 180),
@@ -3735,7 +3853,7 @@ class _CreateChecklistFormState extends State<CreateChecklistForm> {
                       Icons.confirmation_number_outlined,
                       theme,
                     ),
-                    if (vehicleNo.isNotEmpty)
+                    if (showVehicleNoChip)
                       _detailChip('#$vehicleNo', Icons.pin_outlined, theme),
                   ],
                 ),
@@ -3994,6 +4112,69 @@ class _CreateChecklistFormState extends State<CreateChecklistForm> {
             ],
           );
         },
+      ),
+    );
+  }
+
+  Widget _buildParkingLocationCard(ThemeData theme) {
+    final hint = _checklistType == kPreDepartureChecklistType
+        ? 'Where will this vehicle be parked after return?'
+        : 'Confirm where this vehicle is now parked';
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: theme.colorScheme.outline.withOpacity(0.25)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              color: const Color(0xFFEAF7F4),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Icon(
+              Icons.local_parking_outlined,
+              color: theme.colorScheme.secondary,
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: TextField(
+              controller: _parkingLocationCtrl,
+              decoration: InputDecoration(
+                labelText: 'Parking location',
+                hintText: hint,
+                filled: true,
+                fillColor: const Color(0xFFF8FAFC),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 14,
+                ),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  borderSide: BorderSide(
+                    color: theme.colorScheme.outline.withOpacity(0.25),
+                  ),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  borderSide: BorderSide(
+                    color: theme.colorScheme.outline.withOpacity(0.25),
+                  ),
+                ),
+                focusedBorder: const OutlineInputBorder(
+                  borderRadius: BorderRadius.all(Radius.circular(16)),
+                  borderSide: BorderSide(color: Color(kGoldColor), width: 1.2),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

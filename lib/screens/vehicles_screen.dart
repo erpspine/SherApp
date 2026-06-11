@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../config/app_config.dart';
 import '../services/api_service.dart';
+import 'vehicle_availability_screen.dart';
 
 class VehiclesScreen extends StatefulWidget {
   const VehiclesScreen({super.key});
@@ -34,6 +35,8 @@ class _VehiclesScreenState extends State<VehiclesScreen> {
   final ImagePicker _imagePicker = ImagePicker();
   XFile? _selectedPhoto;
   String _formStatus = 'Available';
+  String _assignedDriverId = '';
+  List<Map<String, dynamic>> _drivers = <Map<String, dynamic>>[];
 
   List<dynamic> _all = <dynamic>[];
   List<dynamic> _filtered = <dynamic>[];
@@ -70,9 +73,11 @@ class _VehiclesScreenState extends State<VehiclesScreen> {
     setState(() => _loading = true);
     try {
       final data = await ApiService.fetchList('/vehicles');
+      final drivers = await _loadDrivers();
       if (!mounted) return;
       setState(() {
         _all = data;
+        _drivers = drivers;
         _loading = false;
       });
       _applyFilters();
@@ -81,8 +86,33 @@ class _VehiclesScreenState extends State<VehiclesScreen> {
       setState(() {
         _all = <dynamic>[];
         _filtered = <dynamic>[];
+        _drivers = <Map<String, dynamic>>[];
         _loading = false;
       });
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> _loadDrivers() async {
+    try {
+      final data = await ApiService.fetchList('/vehicles/drivers');
+      return data.whereType<Map>().map((raw) {
+        final m = Map<String, dynamic>.from(raw);
+        return <String, dynamic>{
+          'id': m['id'],
+          'name': (m['name'] ?? '').toString(),
+          'email': (m['email'] ?? '').toString(),
+        };
+      }).toList();
+    } catch (_) {
+      final data = await ApiService.fetchDrivers();
+      return data.whereType<Map>().map((raw) {
+        final m = Map<String, dynamic>.from(raw);
+        return <String, dynamic>{
+          'id': m['id'],
+          'name': (m['name'] ?? '').toString(),
+          'email': (m['email'] ?? '').toString(),
+        };
+      }).toList();
     }
   }
 
@@ -299,6 +329,12 @@ class _VehiclesScreenState extends State<VehiclesScreen> {
                       label: 'Status',
                       required: true,
                       child: _statusDropdown(),
+                    ),
+                    const SizedBox(height: 12),
+                    _singleField(
+                      label: 'Assigned Driver',
+                      required: false,
+                      child: _assignedDriverDropdown(),
                     ),
                     const SizedBox(height: 12),
                     _singleField(
@@ -545,6 +581,41 @@ class _VehiclesScreenState extends State<VehiclesScreen> {
     );
   }
 
+  Widget _assignedDriverDropdown() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFD0D5DD)),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: _assignedDriverId,
+          isExpanded: true,
+          icon: const Icon(
+            Icons.keyboard_arrow_down_rounded,
+            color: Color(0xFF667085),
+          ),
+          items: [
+            const DropdownMenuItem(value: '', child: Text('Unassigned')),
+            ..._drivers.map((d) {
+              final id = (d['id'] ?? '').toString();
+              final name = (d['name'] ?? '').toString();
+              final email = (d['email'] ?? '').toString();
+              final label = email.isEmpty ? name : '$name ($email)';
+              return DropdownMenuItem(value: id, child: Text(label));
+            }),
+          ],
+          onChanged: (value) {
+            if (value == null) return;
+            setState(() => _assignedDriverId = value);
+          },
+        ),
+      ),
+    );
+  }
+
   Widget _formBottomBar() {
     final compact = _isCompact(context);
 
@@ -587,7 +658,7 @@ class _VehiclesScreenState extends State<VehiclesScreen> {
             child: SizedBox(
               height: 52,
               child: ElevatedButton(
-                onPressed: () {},
+                onPressed: _saveVehicle,
                 style: ElevatedButton.styleFrom(
                   elevation: 0,
                   backgroundColor: const Color(kGoldColor),
@@ -638,6 +709,85 @@ class _VehiclesScreenState extends State<VehiclesScreen> {
         ),
       );
     }
+  }
+
+  Future<void> _saveVehicle() async {
+    final vehicleNo = _vehicleNoCtrl.text.trim();
+    final plateNo = _plateNoCtrl.text.trim();
+    final make = _makeCtrl.text.trim();
+    final model = _modelCtrl.text.trim();
+    final year = int.tryParse(_yearCtrl.text.trim());
+    final seats = int.tryParse(_seatsCtrl.text.trim());
+    final initialMileage = int.tryParse(_initialMileageCtrl.text.trim());
+    final chassis = _chassisCtrl.text.trim();
+
+    if (vehicleNo.isEmpty ||
+        plateNo.isEmpty ||
+        make.isEmpty ||
+        model.isEmpty ||
+        year == null ||
+        seats == null ||
+        initialMileage == null ||
+        chassis.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Fill all required fields before saving.'),
+        ),
+      );
+      return;
+    }
+
+    final fields = <String, String>{
+      'vehicleNo': vehicleNo,
+      'plateNo': plateNo,
+      'make': make,
+      'model': model,
+      'year': year.toString(),
+      'seats': seats.toString(),
+      'initialMileage': initialMileage.toString(),
+      'mileage': initialMileage.toString(),
+      'status': _formStatus,
+      'assignedDriverId': _assignedDriverId,
+      'chassis': chassis,
+      'specs': _specsCtrl.text.trim(),
+    };
+
+    try {
+      await ApiService.postMultipart(
+        '/vehicles',
+        fields: fields,
+        fileField: _selectedPhoto == null ? null : 'photo',
+        filePath: _selectedPhoto?.path,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Vehicle saved successfully.')),
+      );
+      _resetForm();
+      setState(() => _showAddForm = false);
+      await _load();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to save vehicle: $e')));
+    }
+  }
+
+  void _resetForm() {
+    _vehicleNoCtrl.clear();
+    _plateNoCtrl.clear();
+    _makeCtrl.clear();
+    _modelCtrl.clear();
+    _yearCtrl.text = DateTime.now().year.toString();
+    _seatsCtrl.clear();
+    _initialMileageCtrl.clear();
+    _chassisCtrl.clear();
+    _specsCtrl.clear();
+    _selectedPhoto = null;
+    _formStatus = 'Available';
+    _assignedDriverId = '';
   }
 
   Widget _photoAttachmentField() {
@@ -753,14 +903,7 @@ class _VehiclesScreenState extends State<VehiclesScreen> {
   Widget _header() {
     return Row(
       children: [
-        Builder(
-          builder: (ctx) => IconButton(
-            onPressed: () => Scaffold.of(ctx).openDrawer(),
-            icon: const Icon(Icons.menu_rounded, size: 30),
-            color: const Color(0xFF1F2A44),
-          ),
-        ),
-        const SizedBox(width: 2),
+        const SizedBox(width: 8),
         const Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1090,6 +1233,13 @@ class _VehiclesScreenState extends State<VehiclesScreen> {
     final transmission = (row['transmission'] ?? row['gearbox'] ?? 'Automatic')
         .toString();
     final type = (row['type'] ?? row['vehicle_type'] ?? 'SUV').toString();
+    final assignedDriver =
+        (row['assigned_driver']?['name'] ??
+                row['assignedDriver']?['name'] ??
+                row['assigned_driver_name'] ??
+                row['assignedDriverName'] ??
+                '')
+            .toString();
 
     final status = _statusFromRow(row);
     final statusUi = _statusUi(status);
@@ -1160,6 +1310,10 @@ class _VehiclesScreenState extends State<VehiclesScreen> {
                     _specItem(Icons.directions_car_outlined, type),
                     _specItem(Icons.local_gas_station_outlined, fuel),
                     _specItem(Icons.settings_outlined, transmission),
+                    _specItem(
+                      Icons.person_outline_rounded,
+                      assignedDriver.isEmpty ? 'Unassigned' : assignedDriver,
+                    ),
                   ],
                 ),
               ],
@@ -1211,16 +1365,44 @@ class _VehiclesScreenState extends State<VehiclesScreen> {
                 ),
               ),
               const SizedBox(height: 6),
-              const Icon(
-                Icons.more_vert_rounded,
-                color: Color(0xFF667085),
-                size: 22,
+              PopupMenuButton<String>(
+                padding: EdgeInsets.zero,
+                icon: const Icon(
+                  Icons.more_vert_rounded,
+                  color: Color(0xFF667085),
+                  size: 22,
+                ),
+                onSelected: (value) => _onVehicleActionSelected(row, value),
+                itemBuilder: (context) => const [
+                  PopupMenuItem<String>(
+                    value: 'availability_calendar',
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.calendar_month_outlined,
+                          size: 18,
+                          color: Color(0xFF475467),
+                        ),
+                        SizedBox(width: 8),
+                        Text('Availability Calendar'),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
         ],
       ),
     );
+  }
+
+  void _onVehicleActionSelected(Map row, String action) {
+    if (action == 'availability_calendar') {
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const VehicleAvailabilityScreen()),
+      );
+    }
   }
 
   Widget _specItem(IconData icon, String text) {

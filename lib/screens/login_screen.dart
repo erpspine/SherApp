@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/auth_provider.dart';
-import '../screens/home_screen.dart';
+import '../services/api_service.dart';
+import 'driver_trips_screen.dart';
+import 'drivers_screen.dart';
+import 'home_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -57,12 +60,32 @@ class _LoginScreenState extends State<LoginScreen> {
     if (!mounted) return;
 
     setState(() => _busy = false);
-    if (ok) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const HomeScreen()),
+    if (!ok) return;
+
+    if (auth.hasRole('Driver')) {
+      Map<String, dynamic>? user;
+      try {
+        user = await ApiService.refreshMeCache();
+      } catch (_) {
+        user = await ApiService.getCurrentUser();
+      }
+      if (!mounted) return;
+
+      Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+        MaterialPageRoute(
+          builder: (_) => user == null
+              ? const DriversScreen()
+              : DriverTripsScreen(driver: user!, useCurrentAssignments: true),
+        ),
+        (_) => false,
       );
+      return;
     }
+
+    Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const HomeScreen()),
+      (_) => false,
+    );
   }
 
   @override

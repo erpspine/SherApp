@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'package:provider/provider.dart';
 import '../config/app_config.dart';
+import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
 import 'long_term_leasing_screen.dart';
+import 'invoices_screen.dart';
+import 'lease_calendar_screen.dart';
+import 'vehicle_availability_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -19,6 +24,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   int _activeLeases = 0;
   int _openQuotations = 0;
   int _maintenanceCount = 0;
+  int _invoiceCount = 0;
   double _monthlyRevenue = 0;
 
   List<dynamic> _recentQuotations = <dynamic>[];
@@ -59,6 +65,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
       final quotationsRaw = await ApiService.fetchList(
         '/quotations',
       ).catchError((_) => <dynamic>[]);
+      final invoicesRaw = await ApiService.fetchList(
+        '/invoices',
+      ).catchError((_) => <dynamic>[]);
       final proformaRaw = await ApiService.fetchList(
         '/proforma-invoices',
       ).catchError((_) => <dynamic>[]);
@@ -73,6 +82,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       final vehicles = vehiclesRaw;
       final leads = leadsRaw;
       final quotations = quotationsRaw;
+      final invoices = invoicesRaw;
       final proformas = proformaRaw;
       final allocations = allocationsRaw;
 
@@ -148,6 +158,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ? dashboardMonthlyRevenue
             : monthlyRevenue;
         _maintenanceCount = maintenance;
+        _invoiceCount = invoices.length;
         _recentQuotations = quotations.take(3).toList();
         _revenueSeries = revenueData;
         _calendarAllocations = allocationsByDate;
@@ -172,6 +183,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final auth = context.watch<AuthProvider>();
+    final isOperator = auth.roles.any((role) {
+      final normalizedRole = role.trim().toLowerCase();
+      return normalizedRole == 'operator' || normalizedRole == 'operations';
+    });
+
     if (_loading) {
       return Center(
         child: CircularProgressIndicator(
@@ -205,21 +222,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
           const SizedBox(height: 16),
           _searchBar(),
           const SizedBox(height: 16),
-          _operationsSnapshot(),
+          _operationsSnapshot(isOperator: isOperator),
           const SizedBox(height: 14),
-          _kpiGrid(),
-          const SizedBox(height: 18),
-          _revenueChartCard(),
+          _kpiGrid(isOperator: isOperator),
+          if (!isOperator) ...[const SizedBox(height: 18), _revenueChartCard()],
           const SizedBox(height: 18),
           _allocationCalendarCard(),
           const SizedBox(height: 18),
           _sectionTitle('Quick Actions'),
           const SizedBox(height: 12),
-          _quickActions(),
+          _quickActions(isOperator: isOperator),
           const SizedBox(height: 18),
           _recentActivityHeader(),
           const SizedBox(height: 10),
-          _activityCard(),
+          _activityCard(isOperator: isOperator),
         ],
       ),
     );
@@ -377,7 +393,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _operationsSnapshot() {
+  Widget _operationsSnapshot({required bool isOperator}) {
     final theme = Theme.of(context);
     final scale = _fontScale(context);
     final utilization = _totalFleet == 0
@@ -444,40 +460,75 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           const SizedBox(height: 14),
           Row(
-            children: [
-              Expanded(
-                child: _snapshotMetric(
-                  icon: Icons.donut_large_rounded,
-                  iconBg: const Color(0xFFE6F8F3),
-                  iconColor: const Color(0xFF0D8F73),
-                  label: 'Fleet Utilization',
-                  value: '$utilization%',
-                  valueColor: const Color(0xFF0D8F73),
-                ),
-              ),
-              _divider(),
-              Expanded(
-                child: _snapshotMetric(
-                  icon: Icons.attach_money_rounded,
-                  iconBg: const Color(0xFFEAF9E2),
-                  iconColor: const Color(0xFF3A9A1F),
-                  label: 'Monthly Revenue',
-                  value: _money(_monthlyRevenue),
-                  valueColor: const Color(0xFF0F7A57),
-                ),
-              ),
-              _divider(),
-              Expanded(
-                child: _snapshotMetric(
-                  icon: Icons.description_outlined,
-                  iconBg: const Color(0xFFFFF0E5),
-                  iconColor: const Color(0xFFD96913),
-                  label: 'Open Quotations',
-                  value: '$_openQuotations',
-                  valueColor: const Color(0xFFD96913),
-                ),
-              ),
-            ],
+            children: isOperator
+                ? [
+                    Expanded(
+                      child: _snapshotMetric(
+                        icon: Icons.donut_large_rounded,
+                        iconBg: const Color(0xFFE6F8F3),
+                        iconColor: const Color(0xFF0D8F73),
+                        label: 'Fleet Utilization',
+                        value: '$utilization%',
+                        valueColor: const Color(0xFF0D8F73),
+                      ),
+                    ),
+                    _divider(),
+                    Expanded(
+                      child: _snapshotMetric(
+                        icon: Icons.receipt_long_outlined,
+                        iconBg: const Color(0xFFEAF9E2),
+                        iconColor: const Color(0xFF2F855A),
+                        label: 'Invoices',
+                        value: '$_invoiceCount',
+                        valueColor: const Color(0xFF2F855A),
+                      ),
+                    ),
+                    _divider(),
+                    Expanded(
+                      child: _snapshotMetric(
+                        icon: Icons.assignment_turned_in_outlined,
+                        iconBg: const Color(0xFFFFF0E5),
+                        iconColor: const Color(0xFFD96913),
+                        label: 'Active Leases',
+                        value: '$_activeLeases',
+                        valueColor: const Color(0xFFD96913),
+                      ),
+                    ),
+                  ]
+                : [
+                    Expanded(
+                      child: _snapshotMetric(
+                        icon: Icons.donut_large_rounded,
+                        iconBg: const Color(0xFFE6F8F3),
+                        iconColor: const Color(0xFF0D8F73),
+                        label: 'Fleet Utilization',
+                        value: '$utilization%',
+                        valueColor: const Color(0xFF0D8F73),
+                      ),
+                    ),
+                    _divider(),
+                    Expanded(
+                      child: _snapshotMetric(
+                        icon: Icons.attach_money_rounded,
+                        iconBg: const Color(0xFFEAF9E2),
+                        iconColor: const Color(0xFF3A9A1F),
+                        label: 'Monthly Revenue',
+                        value: _money(_monthlyRevenue),
+                        valueColor: const Color(0xFF0F7A57),
+                      ),
+                    ),
+                    _divider(),
+                    Expanded(
+                      child: _snapshotMetric(
+                        icon: Icons.description_outlined,
+                        iconBg: const Color(0xFFFFF0E5),
+                        iconColor: const Color(0xFFD96913),
+                        label: 'Open Quotations',
+                        value: '$_openQuotations',
+                        valueColor: const Color(0xFFD96913),
+                      ),
+                    ),
+                  ],
           ),
         ],
       ),
@@ -537,7 +588,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _kpiGrid() {
+  Widget _kpiGrid({required bool isOperator}) {
     return GridView.count(
       crossAxisCount: 2,
       shrinkWrap: true,
@@ -545,52 +596,111 @@ class _DashboardScreenState extends State<DashboardScreen> {
       childAspectRatio: 1.08,
       mainAxisSpacing: 0,
       crossAxisSpacing: 0,
-      children: [
-        _kpiCard(
-          title: 'Total Fleet',
-          value: '$_totalFleet',
-          subtitle: 'Vehicles Registered',
-          icon: Icons.directions_car_outlined,
-          tint: const Color(0xFFFFF7E8),
-          iconColor: const Color(0xFFBE7A00),
-          shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.only(topLeft: Radius.circular(18)),
-          ),
-        ),
-        _kpiCard(
-          title: 'Active Leases',
-          value: '$_activeLeases',
-          subtitle: 'Currently on lease',
-          icon: Icons.assignment_turned_in_outlined,
-          tint: const Color(0xFFEFFAF5),
-          iconColor: const Color(0xFF0E8E64),
-          shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.only(topRight: Radius.circular(18)),
-          ),
-        ),
-        _kpiCard(
-          title: 'Open Quotations',
-          value: '$_openQuotations',
-          subtitle: 'Draft/Sent/Approved',
-          icon: Icons.description_outlined,
-          tint: const Color(0xFFFFF2EC),
-          iconColor: const Color(0xFFD86A14),
-          shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.only(bottomLeft: Radius.circular(18)),
-          ),
-        ),
-        _kpiCard(
-          title: 'This Month Revenue',
-          value: _money(_monthlyRevenue),
-          subtitle: 'This month',
-          icon: Icons.attach_money_rounded,
-          tint: const Color(0xFFEAF7FF),
-          iconColor: const Color(0xFF1284C4),
-          shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.only(bottomRight: Radius.circular(18)),
-          ),
-        ),
-      ],
+      children: isOperator
+          ? [
+              _kpiCard(
+                title: 'Total Fleet',
+                value: '$_totalFleet',
+                subtitle: 'Vehicles Registered',
+                icon: Icons.directions_car_outlined,
+                tint: const Color(0xFFFFF7E8),
+                iconColor: const Color(0xFFBE7A00),
+                shape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.only(topLeft: Radius.circular(18)),
+                ),
+              ),
+              _kpiCard(
+                title: 'Active Leases',
+                value: '$_activeLeases',
+                subtitle: 'Currently on lease',
+                icon: Icons.assignment_turned_in_outlined,
+                tint: const Color(0xFFEFFAF5),
+                iconColor: const Color(0xFF0E8E64),
+                shape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.only(
+                    topRight: Radius.circular(18),
+                  ),
+                ),
+              ),
+              _kpiCard(
+                title: 'Maintenance',
+                value: '$_maintenanceCount',
+                subtitle: 'Vehicles in service',
+                icon: Icons.build_outlined,
+                tint: const Color(0xFFFFF2EC),
+                iconColor: const Color(0xFFD86A14),
+                shape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.only(
+                    bottomLeft: Radius.circular(18),
+                  ),
+                ),
+              ),
+              _kpiCard(
+                title: 'Invoices',
+                value: '$_invoiceCount',
+                subtitle: 'Issued invoices',
+                icon: Icons.receipt_long_outlined,
+                tint: const Color(0xFFEAF7FF),
+                iconColor: const Color(0xFF1284C4),
+                shape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.only(
+                    bottomRight: Radius.circular(18),
+                  ),
+                ),
+              ),
+            ]
+          : [
+              _kpiCard(
+                title: 'Total Fleet',
+                value: '$_totalFleet',
+                subtitle: 'Vehicles Registered',
+                icon: Icons.directions_car_outlined,
+                tint: const Color(0xFFFFF7E8),
+                iconColor: const Color(0xFFBE7A00),
+                shape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.only(topLeft: Radius.circular(18)),
+                ),
+              ),
+              _kpiCard(
+                title: 'Active Leases',
+                value: '$_activeLeases',
+                subtitle: 'Currently on lease',
+                icon: Icons.assignment_turned_in_outlined,
+                tint: const Color(0xFFEFFAF5),
+                iconColor: const Color(0xFF0E8E64),
+                shape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.only(
+                    topRight: Radius.circular(18),
+                  ),
+                ),
+              ),
+              _kpiCard(
+                title: 'Open Quotations',
+                value: '$_openQuotations',
+                subtitle: 'Draft/Sent/Approved',
+                icon: Icons.description_outlined,
+                tint: const Color(0xFFFFF2EC),
+                iconColor: const Color(0xFFD86A14),
+                shape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.only(
+                    bottomLeft: Radius.circular(18),
+                  ),
+                ),
+              ),
+              _kpiCard(
+                title: 'This Month Revenue',
+                value: _money(_monthlyRevenue),
+                subtitle: 'This month',
+                icon: Icons.attach_money_rounded,
+                tint: const Color(0xFFEAF7FF),
+                iconColor: const Color(0xFF1284C4),
+                shape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.only(
+                    bottomRight: Radius.circular(18),
+                  ),
+                ),
+              ),
+            ],
     );
   }
 
@@ -802,8 +912,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         begin: Alignment.topCenter,
                         end: Alignment.bottomCenter,
                         colors: [
-                          const Color(0xFF0F766E).withOpacity(0.26),
-                          const Color(0xFFC9A236).withOpacity(0.04),
+                          const Color(0xFF0F766E).withValues(alpha: 0.26),
+                          const Color(0xFFC9A236).withValues(alpha: 0.04),
                         ],
                       ),
                     ),
@@ -1022,7 +1132,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 decoration: BoxDecoration(
                                   shape: BoxShape.circle,
                                   color: isSelected
-                                      ? Colors.white.withOpacity(0.85)
+                                      ? Colors.white.withValues(alpha: 0.85)
                                       : _statusDotColor(
                                           (dayAllocs[i]['status'] ?? '')
                                               .toString(),
@@ -1145,68 +1255,131 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _quickActions() {
+  Widget _quickActions({required bool isOperator}) {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: Row(
-        children: [
-          SizedBox(
-            width: 132,
-            child: _quickActionItem(
-              label: 'Add Vehicle',
-              icon: Icons.add_circle_outline,
-              iconColor: const Color(0xFFDEA100),
-              tint: const Color(0xFFFFF8E9),
-            ),
-          ),
-          const SizedBox(width: 10),
-          SizedBox(
-            width: 132,
-            child: _quickActionItem(
-              label: 'New Quote',
-              icon: Icons.note_add_outlined,
-              iconColor: const Color(0xFF0F9D67),
-              tint: const Color(0xFFEFFAF5),
-            ),
-          ),
-          const SizedBox(width: 10),
-          SizedBox(
-            width: 132,
-            child: _quickActionItem(
-              label: 'New Job Card',
-              icon: Icons.assignment_add,
-              iconColor: const Color(0xFF0E82C2),
-              tint: const Color(0xFFECF7FF),
-            ),
-          ),
-          const SizedBox(width: 10),
-          SizedBox(
-            width: 132,
-            child: _quickActionItem(
-              label: 'Safari Allocation',
-              icon: Icons.groups_outlined,
-              iconColor: const Color(0xFF6C47C5),
-              tint: const Color(0xFFF4F1FF),
-            ),
-          ),
-          const SizedBox(width: 10),
-          SizedBox(
-            width: 132,
-            child: _quickActionItem(
-              label: 'Long Term Lease',
-              icon: Icons.key_outlined,
-              iconColor: const Color(0xFFB88910),
-              tint: const Color(0xFFFFF5E2),
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => const LongTermLeasingScreen(),
+        children: isOperator
+            ? [
+                SizedBox(
+                  width: 132,
+                  child: _quickActionItem(
+                    label: 'Add Vehicle',
+                    icon: Icons.add_circle_outline,
+                    iconColor: const Color(0xFFDEA100),
+                    tint: const Color(0xFFFFF8E9),
                   ),
-                );
-              },
-            ),
-          ),
-        ],
+                ),
+                const SizedBox(width: 10),
+                SizedBox(
+                  width: 132,
+                  child: _quickActionItem(
+                    label: 'Vehicle Availability',
+                    icon: Icons.calendar_month_outlined,
+                    iconColor: const Color(0xFF0E82C2),
+                    tint: const Color(0xFFECF7FF),
+                    onTap: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const VehicleAvailabilityScreen(),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(width: 10),
+                SizedBox(
+                  width: 132,
+                  child: _quickActionItem(
+                    label: 'Lease Calendar',
+                    icon: Icons.event_available_outlined,
+                    iconColor: const Color(0xFF6C47C5),
+                    tint: const Color(0xFFF4F1FF),
+                    onTap: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const LeaseCalendarScreen(),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(width: 10),
+                SizedBox(
+                  width: 132,
+                  child: _quickActionItem(
+                    label: 'Invoices',
+                    icon: Icons.receipt_long_outlined,
+                    iconColor: const Color(0xFF0F9D67),
+                    tint: const Color(0xFFEFFAF5),
+                    onTap: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const InvoicesScreen(),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ]
+            : [
+                SizedBox(
+                  width: 132,
+                  child: _quickActionItem(
+                    label: 'Add Vehicle',
+                    icon: Icons.add_circle_outline,
+                    iconColor: const Color(0xFFDEA100),
+                    tint: const Color(0xFFFFF8E9),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                SizedBox(
+                  width: 132,
+                  child: _quickActionItem(
+                    label: 'New Quote',
+                    icon: Icons.note_add_outlined,
+                    iconColor: const Color(0xFF0F9D67),
+                    tint: const Color(0xFFEFFAF5),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                SizedBox(
+                  width: 132,
+                  child: _quickActionItem(
+                    label: 'New Job Card',
+                    icon: Icons.assignment_add,
+                    iconColor: const Color(0xFF0E82C2),
+                    tint: const Color(0xFFECF7FF),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                SizedBox(
+                  width: 132,
+                  child: _quickActionItem(
+                    label: 'Safari Allocation',
+                    icon: Icons.groups_outlined,
+                    iconColor: const Color(0xFF6C47C5),
+                    tint: const Color(0xFFF4F1FF),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                SizedBox(
+                  width: 132,
+                  child: _quickActionItem(
+                    label: 'Long Term Lease',
+                    icon: Icons.key_outlined,
+                    iconColor: const Color(0xFFB88910),
+                    tint: const Color(0xFFFFF5E2),
+                    onTap: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const LongTermLeasingScreen(),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
       ),
     );
   }
@@ -1288,7 +1461,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _activityCard() {
+  Widget _activityCard({required bool isOperator}) {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
@@ -1301,10 +1474,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
             icon: Icons.note_alt_outlined,
             iconBg: const Color(0xFFEFFAF5),
             iconColor: const Color(0xFF109B67),
-            title: _recentQuotations.isNotEmpty
+            title: isOperator
+                ? 'Invoice activity'
+                : _recentQuotations.isNotEmpty
                 ? 'New quotation sent'
                 : 'Quotation draft created',
-            subtitle: _recentQuotations.isNotEmpty
+            subtitle: isOperator
+                ? '$_invoiceCount invoices available in the system'
+                : _recentQuotations.isNotEmpty
                 ? _recentQuoteSubtitle(_recentQuotations.first)
                 : 'No new quote activity found yet',
             time: '2h ago',

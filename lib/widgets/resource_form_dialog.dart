@@ -1,13 +1,39 @@
 import 'package:flutter/material.dart';
 import '../config/app_config.dart';
 
-enum ResourceFieldType { text, number, date, select, textarea }
+enum ResourceFieldType { text, number, date, select, textarea, itinerary }
 
-typedef ResourceFieldValueSetter = void Function(String key, String value);
+class _ItineraryRowControllers {
+  _ItineraryRowControllers({
+    String date = '',
+    String description = '',
+    String allowance = '',
+  }) : dateCtrl = TextEditingController(text: date),
+       descriptionCtrl = TextEditingController(text: description),
+       allowanceCtrl = TextEditingController(text: allowance);
+
+  final TextEditingController dateCtrl;
+  final TextEditingController descriptionCtrl;
+  final TextEditingController allowanceCtrl;
+
+  void dispose() {
+    dateCtrl.dispose();
+    descriptionCtrl.dispose();
+    allowanceCtrl.dispose();
+  }
+}
+
+typedef ResourceFieldValueSetter = void Function(String key, dynamic value);
 typedef ResourceAutocompleteSelected =
     void Function(
       String fieldKey,
       String selectedValue,
+      ResourceFieldValueSetter setValue,
+    );
+typedef ResourceFieldChanged =
+    void Function(
+      String fieldKey,
+      dynamic value,
       ResourceFieldValueSetter setValue,
     );
 
@@ -18,6 +44,8 @@ class ResourceFormField {
   final bool requiredField;
   final List<String> options;
   final int maxLines;
+  final String? visibleWhenKey;
+  final List<String> visibleWhenValues;
 
   const ResourceFormField({
     required this.keyName,
@@ -26,6 +54,8 @@ class ResourceFormField {
     this.requiredField = false,
     this.options = const <String>[],
     this.maxLines = 1,
+    this.visibleWhenKey,
+    this.visibleWhenValues = const <String>[],
   });
 }
 
@@ -34,6 +64,7 @@ class ResourceFormDialog extends StatefulWidget {
   final List<ResourceFormField> fields;
   final Map<String, dynamic>? initialValues;
   final ResourceAutocompleteSelected? onAutocompleteSelected;
+  final ResourceFieldChanged? onFieldChanged;
 
   const ResourceFormDialog({
     super.key,
@@ -41,6 +72,7 @@ class ResourceFormDialog extends StatefulWidget {
     required this.fields,
     this.initialValues,
     this.onAutocompleteSelected,
+    this.onFieldChanged,
   });
 
   @override
@@ -53,6 +85,8 @@ class _ResourceFormDialogState extends State<ResourceFormDialog> {
       <String, TextEditingController>{};
   final Map<String, FocusNode> _focusNodes = <String, FocusNode>{};
   final Map<String, String> _selectValues = <String, String>{};
+  final Map<String, List<_ItineraryRowControllers>> _itineraryRows =
+      <String, List<_ItineraryRowControllers>>{};
 
   @override
   void initState() {
@@ -60,9 +94,14 @@ class _ResourceFormDialogState extends State<ResourceFormDialog> {
     for (final field in widget.fields) {
       final value = widget.initialValues?[field.keyName]?.toString() ?? '';
       if (field.type == ResourceFieldType.select) {
-        _selectValues[field.keyName] = value.isNotEmpty
+        final hasValue = value.isNotEmpty && field.options.contains(value);
+        _selectValues[field.keyName] = hasValue
             ? value
             : (field.options.isNotEmpty ? field.options.first : '');
+      } else if (field.type == ResourceFieldType.itinerary) {
+        _itineraryRows[field.keyName] = _buildItineraryRows(
+          widget.initialValues?[field.keyName],
+        );
       } else {
         _controllers[field.keyName] = TextEditingController(text: value);
         _focusNodes[field.keyName] = FocusNode();
@@ -78,7 +117,62 @@ class _ResourceFormDialogState extends State<ResourceFormDialog> {
     for (final f in _focusNodes.values) {
       f.dispose();
     }
+    for (final rows in _itineraryRows.values) {
+      for (final row in rows) {
+        row.dispose();
+      }
+    }
     super.dispose();
+  }
+
+  List<_ItineraryRowControllers> _buildItineraryRows(dynamic raw) {
+    final rows = <_ItineraryRowControllers>[];
+
+    if (raw is List) {
+      for (final item in raw) {
+        if (item is Map) {
+          final map = Map<String, dynamic>.from(item);
+          final date = (map['date'] ?? '').toString();
+          final description =
+              (map['dayDescription'] ?? map['description'] ?? '').toString();
+          final allowance =
+              (map['allowancePerDay'] ?? map['allowance_per_day'] ?? '')
+                  .toString();
+          rows.add(
+            _ItineraryRowControllers(
+              date: date,
+              description: description,
+              allowance: allowance,
+            ),
+          );
+        } else if (item is String && item.trim().isNotEmpty) {
+          rows.add(_ItineraryRowControllers(description: item.trim()));
+        }
+      }
+    }
+
+    if (rows.isEmpty) {
+      rows.add(_ItineraryRowControllers());
+    }
+    return rows;
+  }
+
+  void _addItineraryRow(String key) {
+    setState(() {
+      _itineraryRows.putIfAbsent(key, () => <_ItineraryRowControllers>[]);
+      _itineraryRows[key]!.add(_ItineraryRowControllers());
+    });
+  }
+
+  void _removeItineraryRow(String key, int index) {
+    final rows = _itineraryRows[key];
+    if (rows == null || rows.length <= 1 || index < 0 || index >= rows.length) {
+      return;
+    }
+    setState(() {
+      final row = rows.removeAt(index);
+      row.dispose();
+    });
   }
 
   @override
@@ -239,7 +333,7 @@ class _ResourceFormDialogState extends State<ResourceFormDialog> {
     );
   }
 
-  void _setFieldValue(String key, String value) {
+  void _setFieldValue(String key, dynamic value) {
     final field = widget.fields.cast<ResourceFormField?>().firstWhere(
       (f) => f?.keyName == key,
       orElse: () => null,
@@ -247,23 +341,39 @@ class _ResourceFormDialogState extends State<ResourceFormDialog> {
     if (field == null) return;
 
     if (field.type == ResourceFieldType.select) {
-      if (value.isNotEmpty &&
+      final textValue = (value ?? '').toString();
+      if (textValue.isNotEmpty &&
           field.options.isNotEmpty &&
-          !field.options.contains(value)) {
+          !field.options.contains(textValue)) {
         return;
       }
-      setState(() => _selectValues[key] = value);
+      setState(() => _selectValues[key] = textValue);
+      return;
+    }
+
+    if (field.type == ResourceFieldType.itinerary) {
+      final oldRows = _itineraryRows[key] ?? <_ItineraryRowControllers>[];
+      for (final row in oldRows) {
+        row.dispose();
+      }
+      _itineraryRows[key] = _buildItineraryRows(value);
+      setState(() {});
       return;
     }
 
     final controller = _controllers[key];
     if (controller == null) return;
-    controller.text = value;
+    controller.text = (value ?? '').toString();
     setState(() {});
   }
 
   Widget _buildField(ResourceFormField field) {
+    if (!_isFieldVisible(field)) {
+      return const SizedBox.shrink();
+    }
+
     final label = field.requiredField ? '${field.label} *' : field.label;
+    final uniqueOptions = field.options.toSet().toList();
 
     if (field.type == ResourceFieldType.text && field.options.isNotEmpty) {
       return _fieldShell(
@@ -274,9 +384,9 @@ class _ResourceFormDialogState extends State<ResourceFormDialog> {
           optionsBuilder: (TextEditingValue textEditingValue) {
             final q = textEditingValue.text.trim().toLowerCase();
             if (q.isEmpty) {
-              return field.options.take(8);
+              return uniqueOptions.take(8);
             }
-            return field.options
+            return uniqueOptions
                 .where((o) => o.toLowerCase().contains(q))
                 .take(8);
           },
@@ -362,9 +472,10 @@ class _ResourceFormDialogState extends State<ResourceFormDialog> {
     }
 
     if (field.type == ResourceFieldType.select) {
-      final value =
+      final rawValue =
           _selectValues[field.keyName] ??
-          (field.options.isNotEmpty ? field.options.first : '');
+          (uniqueOptions.isNotEmpty ? uniqueOptions.first : '');
+      final value = uniqueOptions.contains(rawValue) ? rawValue : '';
       return _fieldShell(
         label: label,
         child: DropdownButtonFormField<String>(
@@ -373,7 +484,7 @@ class _ResourceFormDialogState extends State<ResourceFormDialog> {
           style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
           iconEnabledColor: Theme.of(context).colorScheme.onSurfaceVariant,
           decoration: _decoration(),
-          items: field.options
+          items: uniqueOptions
               .map(
                 (option) => DropdownMenuItem<String>(
                   value: option,
@@ -386,8 +497,11 @@ class _ResourceFormDialogState extends State<ResourceFormDialog> {
                 ),
               )
               .toList(),
-          onChanged: (value) =>
-              setState(() => _selectValues[field.keyName] = value ?? ''),
+          onChanged: (value) {
+            final next = value ?? '';
+            setState(() => _selectValues[field.keyName] = next);
+            widget.onFieldChanged?.call(field.keyName, next, _setFieldValue);
+          },
           validator: (value) {
             if (field.requiredField &&
                 (value == null || value.trim().isEmpty)) {
@@ -427,12 +541,14 @@ class _ResourceFormDialogState extends State<ResourceFormDialog> {
     }
 
     if (field.type == ResourceFieldType.textarea) {
+      final effectiveMaxLines = field.maxLines > 1 ? field.maxLines : 4;
+      final effectiveMinLines = effectiveMaxLines >= 3 ? 3 : effectiveMaxLines;
       return _fieldShell(
         label: label,
         child: TextFormField(
           controller: _controllers[field.keyName],
-          maxLines: field.maxLines > 1 ? field.maxLines : 4,
-          minLines: 3,
+          maxLines: effectiveMaxLines,
+          minLines: effectiveMinLines,
           keyboardType: TextInputType.multiline,
           style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
           decoration: _decoration(
@@ -445,6 +561,110 @@ class _ResourceFormDialogState extends State<ResourceFormDialog> {
             }
             return null;
           },
+        ),
+      );
+    }
+
+    if (field.type == ResourceFieldType.itinerary) {
+      final rows =
+          _itineraryRows[field.keyName] ?? <_ItineraryRowControllers>[];
+      return _fieldShell(
+        label: label,
+        child: Column(
+          children: [
+            ...List<Widget>.generate(rows.length, (index) {
+              final row = rows[index];
+              return Container(
+                margin: const EdgeInsets.only(bottom: 10),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF8FAFC),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: Theme.of(context).colorScheme.outline,
+                    width: 0.7,
+                  ),
+                ),
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Line Item ${index + 1}',
+                            style: TextStyle(
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onSurfaceVariant,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: 'Remove line',
+                          onPressed: rows.length > 1
+                              ? () => _removeItineraryRow(field.keyName, index)
+                              : null,
+                          icon: const Icon(Icons.delete_outline, size: 18),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    TextFormField(
+                      controller: row.dateCtrl,
+                      readOnly: true,
+                      decoration: _decoration(
+                        hintText: 'Date',
+                        suffixIcon: Icon(
+                          Icons.calendar_today_outlined,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          size: 18,
+                        ),
+                      ),
+                      onTap: () => _selectItineraryDate(field.keyName, index),
+                    ),
+                    const SizedBox(height: 8),
+                    TextFormField(
+                      controller: row.descriptionCtrl,
+                      decoration: _decoration(hintText: 'Day Description'),
+                      validator: (value) {
+                        if (!field.requiredField) return null;
+                        final hasAny = rows.any((r) {
+                          final date = r.dateCtrl.text.trim();
+                          final desc = r.descriptionCtrl.text.trim();
+                          final allw = r.allowanceCtrl.text.trim();
+                          return date.isNotEmpty ||
+                              desc.isNotEmpty ||
+                              allw.isNotEmpty;
+                        });
+                        if (!hasAny) {
+                          return '${field.label} requires at least one line item';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    TextFormField(
+                      controller: row.allowanceCtrl,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: _decoration(hintText: 'Allowance Per Day'),
+                    ),
+                  ],
+                ),
+              );
+            }),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton.icon(
+                onPressed: () => _addItineraryRow(field.keyName),
+                icon: const Icon(Icons.add, size: 16),
+                label: const Text('Add Line Item'),
+              ),
+            ),
+          ],
         ),
       );
     }
@@ -469,6 +689,15 @@ class _ResourceFormDialogState extends State<ResourceFormDialog> {
         },
       ),
     );
+  }
+
+  bool _isFieldVisible(ResourceFormField field) {
+    if (field.visibleWhenKey == null || field.visibleWhenValues.isEmpty) {
+      return true;
+    }
+    final parentKey = field.visibleWhenKey!;
+    final selected = _selectValues[parentKey] ?? '';
+    return field.visibleWhenValues.contains(selected);
   }
 
   Widget _fieldShell({required String label, required Widget child}) {
@@ -569,6 +798,48 @@ class _ResourceFormDialogState extends State<ResourceFormDialog> {
     }
   }
 
+  Future<void> _selectItineraryDate(String fieldKey, int index) async {
+    final rows = _itineraryRows[fieldKey];
+    if (rows == null || index < 0 || index >= rows.length) return;
+
+    final controller = rows[index].dateCtrl;
+    final currentText = controller.text.trim();
+    DateTime? initialDate;
+
+    if (currentText.isNotEmpty) {
+      try {
+        initialDate = DateTime.parse(currentText);
+      } catch (_) {
+        initialDate = null;
+      }
+    }
+
+    final selected = await showDatePicker(
+      context: context,
+      initialDate: initialDate ?? DateTime.now(),
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+      builder: (context, child) {
+        final theme = Theme.of(context);
+        return Theme(
+          data: theme.copyWith(
+            colorScheme: theme.colorScheme.copyWith(
+              primary: const Color(kGoldColor),
+              surface: theme.colorScheme.surface,
+              onSurface: theme.colorScheme.onSurface,
+            ),
+          ),
+          child: child ?? const SizedBox(),
+        );
+      },
+    );
+
+    if (selected != null) {
+      controller.text = selected.toIso8601String().split('T').first;
+      setState(() {});
+    }
+  }
+
   void _submit() {
     if (!_formKey.currentState!.validate()) return;
 
@@ -576,6 +847,34 @@ class _ResourceFormDialogState extends State<ResourceFormDialog> {
     for (final field in widget.fields) {
       if (field.type == ResourceFieldType.select) {
         payload[field.keyName] = _selectValues[field.keyName] ?? '';
+      } else if (field.type == ResourceFieldType.itinerary) {
+        final rows =
+            _itineraryRows[field.keyName] ?? <_ItineraryRowControllers>[];
+        payload[field.keyName] = rows
+            .map((row) {
+              final date = row.dateCtrl.text.trim();
+              final description = row.descriptionCtrl.text.trim();
+              final allowanceText = row.allowanceCtrl.text.trim();
+              final allowance = allowanceText.isEmpty
+                  ? null
+                  : num.tryParse(allowanceText);
+              return <String, dynamic>{
+                'date': date,
+                'dayDescription': description,
+                'allowancePerDay': allowance,
+              };
+            })
+            .where((row) {
+              final date = (row['date'] ?? '').toString().trim();
+              final description = (row['dayDescription'] ?? '')
+                  .toString()
+                  .trim();
+              final allowance = row['allowancePerDay'];
+              return date.isNotEmpty ||
+                  description.isNotEmpty ||
+                  allowance != null;
+            })
+            .toList();
       } else {
         payload[field.keyName] = _controllers[field.keyName]?.text.trim() ?? '';
       }

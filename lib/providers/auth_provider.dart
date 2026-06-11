@@ -15,13 +15,16 @@ class AuthProvider extends ChangeNotifier {
   List<String> get permissions => _permissions;
 
   /// True when the current user holds [role].
-  bool hasRole(String role) => _roles.contains(role);
+  bool hasRole(String role) {
+    final normalized = role.trim().toLowerCase();
+    return _roles.any((r) => r.trim().toLowerCase() == normalized);
+  }
 
   /// True when the current user holds [permission]. Admins implicitly have
   /// every permission, mirroring the web client's behaviour.
   bool hasPermission(String? permission) {
     if (permission == null || permission.isEmpty) return true;
-    if (hasRole('Admin')) return true;
+    if (hasRole('admin')) return true;
     return _permissions.contains(permission);
   }
 
@@ -43,8 +46,22 @@ class AuthProvider extends ChangeNotifier {
     } else {
       _loggedIn = hasToken;
       if (hasToken) {
-        _roles = await ApiService.getRoles();
-        _permissions = await ApiService.getPermissions();
+        try {
+          final me = await ApiService.refreshMeCache();
+          final r = me?['roles'];
+          final p = me?['permissions'];
+          _roles = r is List ? r.map((e) => e.toString()).toList() : const [];
+          _permissions = p is List
+              ? p.map((e) => e.toString()).toList()
+              : const [];
+        } catch (_) {
+          // If the token is stale/invalid, drop the session so the app does
+          // not continue under a mismatched cached identity.
+          await ApiService.clearAuthSession();
+          _loggedIn = false;
+          _roles = const <String>[];
+          _permissions = const <String>[];
+        }
       }
     }
     _loading = false;
@@ -57,7 +74,16 @@ class AuthProvider extends ChangeNotifier {
     bool rememberMe = true,
   }) async {
     _error = null;
-    _loading = true;
+    // Always start from a clean auth state so a previous account cannot
+    // survive behind a failed or mismatched login attempt.
+    await ApiService.clearAuthSession();
+    _loggedIn = false;
+    _roles = const <String>[];
+    _permissions = const <String>[];
+    // Keep `_loading` reserved for app bootstrap token checks only.
+    // Toggling it during interactive login causes the app root to swap to
+    // splash (`home: auth.loading ? _Splash : ...`), rebuilding LoginScreen
+    // and clearing the text fields after an invalid-credentials response.
     notifyListeners();
     try {
       final result = await ApiService.login(
@@ -70,17 +96,20 @@ class AuthProvider extends ChangeNotifier {
       final p = result['permissions'];
       _roles = r is List ? r.map((e) => e.toString()).toList() : const [];
       _permissions = p is List ? p.map((e) => e.toString()).toList() : const [];
-      _loading = false;
       notifyListeners();
       return true;
     } on ApiException catch (e) {
       _error = e.message;
-      _loading = false;
+      _loggedIn = false;
+      _roles = const <String>[];
+      _permissions = const <String>[];
       notifyListeners();
       return false;
     } catch (e) {
       _error = 'Network error. Check your connection.';
-      _loading = false;
+      _loggedIn = false;
+      _roles = const <String>[];
+      _permissions = const <String>[];
       notifyListeners();
       return false;
     }

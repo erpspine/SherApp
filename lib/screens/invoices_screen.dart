@@ -1,4 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:open_filex/open_filex.dart';
+import 'package:path_provider/path_provider.dart';
 import '../config/app_config.dart';
 import '../models/paged_result.dart';
 import '../services/api_service.dart';
@@ -21,6 +25,9 @@ class _InvoicesScreenState extends State<InvoicesScreen> {
   bool _loading = true;
   bool _loadingMore = false;
   bool _fromCache = false;
+  int? _downloadingPiId;
+  int? _confirmingPiId;
+  int? _allocatingPiId;
   int _page = 1;
   int _lastPage = 1;
 
@@ -251,6 +258,298 @@ class _InvoicesScreenState extends State<InvoicesScreen> {
     }
   }
 
+  Future<void> _downloadProformaPdf(Map<String, dynamic> item) async {
+    final id = int.tryParse((item['id'] ?? '').toString());
+    if (id == null) return;
+
+    setState(() => _downloadingPiId = id);
+    try {
+      final bytes = await ApiService.downloadBytes(
+        '/proforma-invoices/$id/pdf',
+      );
+      final dir = await getTemporaryDirectory();
+      final no =
+          (item['pi_no'] ??
+                  item['piNo'] ??
+                  item['proforma_number'] ??
+                  item['proformaNumber'] ??
+                  'pi-$id')
+              .toString();
+      final safe = no.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+      final file = File('${dir.path}${Platform.pathSeparator}$safe.pdf');
+      await file.writeAsBytes(bytes, flush: true);
+      final result = await OpenFilex.open(file.path, type: 'application/pdf');
+      if (!mounted) return;
+      if (result.type != ResultType.done) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('PDF saved to ${file.path}')));
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('PDF download failed: $e')));
+    } finally {
+      if (mounted) {
+        setState(() => _downloadingPiId = null);
+      }
+    }
+  }
+
+  Future<void> _viewProforma(Map<String, dynamic> item) async {
+    final id = int.tryParse((item['id'] ?? '').toString());
+    if (id == null) return;
+
+    try {
+      final raw = await ApiService.get('/proforma-invoices/$id');
+      final data = raw is Map<String, dynamic>
+          ? (raw['data'] is Map
+                ? Map<String, dynamic>.from(raw['data'] as Map)
+                : (raw['proformaInvoice'] is Map
+                      ? Map<String, dynamic>.from(raw['proformaInvoice'] as Map)
+                      : raw))
+          : <String, dynamic>{};
+
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: Text(
+            (data['pi_no'] ??
+                    data['piNo'] ??
+                    data['proforma_number'] ??
+                    data['proformaNumber'] ??
+                    'Proforma')
+                .toString(),
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _kv(
+                  'Client',
+                  (data['client'] ?? data['client_name'] ?? '-').toString(),
+                ),
+                _kv('Status', (data['status'] ?? '-').toString()),
+                _kv(
+                  'Date',
+                  (data['quote_date'] ??
+                          data['quoteDate'] ??
+                          data['date'] ??
+                          '-')
+                      .toString(),
+                ),
+                _kv(
+                  'Total',
+                  (data['total'] ?? data['total_amount'] ?? '-').toString(),
+                ),
+                _kv('Notes', (data['notes'] ?? '-').toString()),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('View failed: $e')));
+    }
+  }
+
+  Widget _kv(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: RichText(
+        text: TextSpan(
+          style: DefaultTextStyle.of(context).style,
+          children: [
+            TextSpan(
+              text: '$label: ',
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+            TextSpan(text: value.isEmpty ? '-' : value),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _confirmProforma(Map<String, dynamic> item) async {
+    final id = int.tryParse((item['id'] ?? '').toString());
+    if (id == null) return;
+
+    setState(() => _confirmingPiId = id);
+    try {
+      await ApiService.post(
+        '/proforma-invoices/$id/confirm',
+        <String, dynamic>{},
+      );
+      await _load(reset: true);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('PI confirmed.')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Confirm failed: $e')));
+    } finally {
+      if (mounted) {
+        setState(() => _confirmingPiId = null);
+      }
+    }
+  }
+
+  Future<void> _allocateVehicles(Map<String, dynamic> item) async {
+    final id = int.tryParse((item['id'] ?? '').toString());
+    if (id == null) return;
+
+    setState(() => _allocatingPiId = id);
+    try {
+      final vehiclesRaw = await ApiService.fetchList('/vehicles');
+      final vehicles = vehiclesRaw
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+
+      final selectedVehicleIds = <int>{};
+      final startCtrl = TextEditingController(
+        text: (item['lead_start_date'] ?? item['leadStartDate'] ?? '')
+            .toString(),
+      );
+      final endCtrl = TextEditingController(
+        text: (item['lead_end_date'] ?? item['leadEndDate'] ?? '').toString(),
+      );
+
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) {
+          return StatefulBuilder(
+            builder: (ctx, setLocal) {
+              return AlertDialog(
+                title: const Text('Allocate Vehicles'),
+                content: SizedBox(
+                  width: 460,
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        TextField(
+                          controller: startCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'Start Date (YYYY-MM-DD)',
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: endCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'End Date (YYYY-MM-DD)',
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        const Text(
+                          'Select Vehicles',
+                          style: TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        const SizedBox(height: 6),
+                        ...vehicles.map((v) {
+                          final vid =
+                              int.tryParse((v['id'] ?? '').toString()) ?? 0;
+                          final label =
+                              '${v['vehicle_no'] ?? v['vehicleNo'] ?? 'Vehicle'} (${v['plate_no'] ?? v['plateNo'] ?? '-'})';
+                          return CheckboxListTile(
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            value: selectedVehicleIds.contains(vid),
+                            title: Text(label),
+                            onChanged: vid <= 0
+                                ? null
+                                : (checked) {
+                                    setLocal(() {
+                                      if (checked == true) {
+                                        selectedVehicleIds.add(vid);
+                                      } else {
+                                        selectedVehicleIds.remove(vid);
+                                      }
+                                    });
+                                  },
+                          );
+                        }),
+                      ],
+                    ),
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx, false),
+                    child: const Text('Cancel'),
+                  ),
+                  ElevatedButton(
+                    onPressed: () => Navigator.pop(ctx, true),
+                    child: const Text('Allocate'),
+                  ),
+                ],
+              );
+            },
+          );
+        },
+      );
+
+      if (confirmed != true) return;
+
+      if (startCtrl.text.trim().isEmpty ||
+          endCtrl.text.trim().isEmpty ||
+          selectedVehicleIds.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Provide start/end dates and select at least one vehicle.',
+            ),
+          ),
+        );
+        return;
+      }
+
+      await ApiService.post('/proforma-invoices/$id/allocate-vehicles', {
+        'allocationRanges': [
+          {
+            'startDate': startCtrl.text.trim(),
+            'endDate': endCtrl.text.trim(),
+            'vehicleIds': selectedVehicleIds.toList(),
+          },
+        ],
+      });
+
+      await _load(reset: true);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Vehicles allocated.')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Allocation failed: $e')));
+    } finally {
+      if (mounted) {
+        setState(() => _allocatingPiId = null);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -431,6 +730,142 @@ class _InvoicesScreenState extends State<InvoicesScreen> {
             spacing: 6,
             runSpacing: 6,
             children: [
+              if (widget.proforma)
+                ElevatedButton.icon(
+                  onPressed: _confirmingPiId == inv['id']
+                      ? null
+                      : () => _confirmProforma(inv),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFEAF2FF),
+                    foregroundColor: const Color(0xFF175CD3),
+                    elevation: 0,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    minimumSize: const Size(0, 36),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: const VisualDensity(
+                      horizontal: -1,
+                      vertical: -1,
+                    ),
+                    textStyle: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  icon: _confirmingPiId == inv['id']
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.check_circle_outline, size: 15),
+                  label: const Text('Confirm'),
+                ),
+              if (widget.proforma)
+                ElevatedButton.icon(
+                  onPressed: _allocatingPiId == inv['id']
+                      ? null
+                      : () => _allocateVehicles(inv),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFF3EEFF),
+                    foregroundColor: const Color(0xFF6941C6),
+                    elevation: 0,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    minimumSize: const Size(0, 36),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: const VisualDensity(
+                      horizontal: -1,
+                      vertical: -1,
+                    ),
+                    textStyle: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  icon: _allocatingPiId == inv['id']
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.directions_car_outlined, size: 15),
+                  label: const Text('Allocate'),
+                ),
+              if (widget.proforma)
+                ElevatedButton.icon(
+                  onPressed: _downloadingPiId == inv['id']
+                      ? null
+                      : () => _downloadProformaPdf(inv),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFDDF6E9),
+                    foregroundColor: const Color(0xFF0F7B45),
+                    elevation: 0,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    minimumSize: const Size(0, 36),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: const VisualDensity(
+                      horizontal: -1,
+                      vertical: -1,
+                    ),
+                    textStyle: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  icon: _downloadingPiId == inv['id']
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.picture_as_pdf_outlined, size: 15),
+                  label: const Text('PDF'),
+                ),
+              if (widget.proforma)
+                ElevatedButton.icon(
+                  onPressed: () => _viewProforma(inv),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: theme.colorScheme.secondaryContainer,
+                    foregroundColor: theme.colorScheme.onSecondaryContainer,
+                    elevation: 0,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    minimumSize: const Size(0, 36),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: const VisualDensity(
+                      horizontal: -1,
+                      vertical: -1,
+                    ),
+                    textStyle: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  icon: const Icon(Icons.visibility_outlined, size: 15),
+                  label: const Text('View'),
+                ),
               if (!widget.proforma)
                 ElevatedButton.icon(
                   onPressed: () => _recordPayment(inv),

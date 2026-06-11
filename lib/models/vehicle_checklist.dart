@@ -73,6 +73,7 @@ class VehicleChecklist {
   final Map<String, dynamic> lead; // Selected lead details
   final Map<String, dynamic> vehicle; // Auto-populated vehicle details
   final String odometer;
+  final String parkingLocation;
   List<ChecklistItem> items;
   String remarks;
   List<String> imagePaths; // Local file paths of images
@@ -82,6 +83,7 @@ class VehicleChecklist {
     required this.lead,
     required this.vehicle,
     this.odometer = '',
+    this.parkingLocation = '',
     this.items = const [],
     this.remarks = '',
     this.imagePaths = const [],
@@ -96,6 +98,8 @@ class VehicleChecklist {
     'odometer_reading': odometer,
     if (type == kPreDepartureChecklistType) 'odometer_out': odometer,
     if (type == kPostDepartureChecklistType) 'odometer_in': odometer,
+    'parkingLocation': parkingLocation,
+    'parking_location': parkingLocation,
     'items': items.map((item) => item.toJson()).toList(),
     'remarks': remarks,
     'images': [],

@@ -170,6 +170,15 @@ class ApiService {
     return _parse(res);
   }
 
+  static Future<dynamic> patch(String path, Map<String, dynamic> body) async {
+    final res = await http.patch(
+      Uri.parse('$kApiBaseUrl$path'),
+      headers: await _headers(),
+      body: jsonEncode(body),
+    );
+    return _parse(res);
+  }
+
   static Future<dynamic> delete(String path) async {
     final res = await http.delete(
       Uri.parse('$kApiBaseUrl$path'),
@@ -262,14 +271,86 @@ class ApiService {
       rememberMe: rememberMe,
     );
 
+    // Validate that the backend actually authenticated the account the user
+    // typed, not a stale/cached identity.
+    final enteredEmail = email.trim().toLowerCase();
+    final loginEmail = user?['email']?.toString().trim().toLowerCase();
+    if (loginEmail != null &&
+        loginEmail.isNotEmpty &&
+        loginEmail != enteredEmail) {
+      await clearAuthSession();
+      throw ApiException(
+        401,
+        'Authenticated account mismatch. Please sign in again.',
+      );
+    }
+
+    // Ask the backend who this token belongs to and overwrite any stale local
+    // identity/role cache. This prevents accidental cross-account UI state.
+    final me = await refreshMeCache();
+    final meEmail = me?['email']?.toString().trim().toLowerCase();
+    if (meEmail != null && meEmail.isNotEmpty && meEmail != enteredEmail) {
+      await clearAuthSession();
+      throw ApiException(
+        401,
+        'Authenticated account mismatch. Please sign in again.',
+      );
+    }
+
     return <String, dynamic>{
       'token': token,
       'token_type': tokenType,
-      'user': user,
-      'roles': roles,
-      'permissions': permissions,
+      'user': me ?? user,
+      'roles': me?['roles'] is List
+          ? (me!['roles'] as List).map((e) => e.toString()).toList()
+          : roles,
+      'permissions': me?['permissions'] is List
+          ? (me!['permissions'] as List).map((e) => e.toString()).toList()
+          : permissions,
       'rememberMe': rememberMe,
     };
+  }
+
+  /// Calls `/me` using the current token and synchronizes local cached user,
+  /// roles, and permissions with what the backend reports.
+  static Future<Map<String, dynamic>?> refreshMeCache() async {
+    final data = await get('/me');
+    if (data is! Map) return null;
+
+    final root = data is Map<String, dynamic>
+        ? data
+        : Map<String, dynamic>.from(data);
+
+    final dynamic rawUser = root['user'] ?? root['data'] ?? root;
+    Map<String, dynamic>? user;
+    if (rawUser is Map<String, dynamic>) {
+      user = rawUser;
+    } else if (rawUser is Map) {
+      user = Map<String, dynamic>.from(rawUser);
+    }
+
+    List<String> readList(dynamic value) {
+      if (value is List) return value.map((e) => e.toString()).toList();
+      return const <String>[];
+    }
+
+    final roles = readList(root['roles'] ?? user?['roles']);
+    final permissions = readList(root['permissions'] ?? user?['permissions']);
+
+    if (user != null) {
+      await _storage.write(key: _userKey, value: jsonEncode(user));
+    }
+    await _storage.write(key: _rolesKey, value: jsonEncode(roles));
+    await _storage.write(key: _permissionsKey, value: jsonEncode(permissions));
+
+    if (user != null) {
+      user = <String, dynamic>{
+        ...user,
+        'roles': roles,
+        'permissions': permissions,
+      };
+    }
+    return user;
   }
 
   /// Fetches all roles and permissions defined in the system.
@@ -283,7 +364,7 @@ class ApiService {
 
   static Future<void> logout() async {
     try {
-      await get('/logout');
+      await post('/logout', <String, dynamic>{});
     } catch (_) {}
     await clearAuthSession();
   }
@@ -613,6 +694,32 @@ class ApiService {
     Map<String, dynamic> payload,
   ) async {
     final data = await post('/trips/$tripId/odometer-logs', payload);
+    if (data is Map<String, dynamic>) return data;
+    if (data is Map) return Map<String, dynamic>.from(data);
+    return <String, dynamic>{};
+  }
+
+  /// Same as [createOdometerLog] but uploads an attached photo (odometer
+  /// picture) using multipart/form-data. Used by the offline sync worker
+  /// when an outbox entry has a `photo_path`.
+  static Future<Map<String, dynamic>> createOdometerLogMultipart(
+    dynamic tripId, {
+    required Map<String, dynamic> payload,
+    required String photoField,
+    required String photoPath,
+  }) async {
+    final fields = <String, String>{};
+    payload.forEach((key, value) {
+      if (value == null) return;
+      fields[key] = value is String ? value : value.toString();
+    });
+
+    final data = await postMultipart(
+      '/trips/$tripId/odometer-logs',
+      fields: fields,
+      fileField: photoField,
+      filePath: photoPath,
+    );
     if (data is Map<String, dynamic>) return data;
     if (data is Map) return Map<String, dynamic>.from(data);
     return <String, dynamic>{};

@@ -6,8 +6,8 @@ import '../config/app_config.dart';
 import '../models/paged_result.dart';
 import '../services/api_service.dart';
 import '../widgets/pagination_footer.dart';
-import '../widgets/resource_form_dialog.dart';
 import '../widgets/status_badge.dart';
+import 'invoices_screen.dart';
 import 'quotation_create_screen.dart';
 
 class QuotationsScreen extends StatefulWidget {
@@ -24,6 +24,9 @@ class _QuotationsScreenState extends State<QuotationsScreen> {
   bool _loadingMore = false;
   bool _fromCache = false;
   int? _downloadingId;
+  int? _markingSentId;
+  int? _convertingId;
+  bool _exporting = false;
   int _page = 1;
   int _lastPage = 1;
 
@@ -138,6 +141,110 @@ class _QuotationsScreenState extends State<QuotationsScreen> {
     }
   }
 
+  Future<void> _markSent(Map<String, dynamic> quotation) async {
+    final idValue = quotation['id'];
+    final id = idValue is int ? idValue : int.tryParse(idValue.toString());
+    if (id == null) return;
+
+    setState(() => _markingSentId = id);
+    try {
+      await ApiService.patch('/quotations/$id/mark-sent', <String, dynamic>{});
+      await _load(reset: true);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Quotation marked as sent.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Mark sent failed: $e')));
+    } finally {
+      if (mounted) {
+        setState(() => _markingSentId = null);
+      }
+    }
+  }
+
+  Future<void> _convertToPi(
+    Map<String, dynamic> quotation, {
+    required bool regenerate,
+  }) async {
+    final idValue = quotation['id'];
+    final id = idValue is int ? idValue : int.tryParse(idValue.toString());
+    if (id == null) return;
+
+    setState(() => _convertingId = id);
+    try {
+      final body = regenerate
+          ? <String, dynamic>{}
+          : <String, dynamic>{
+              'allocationMode': 'later',
+              'allocationRanges': [],
+            };
+
+      await ApiService.post('/quotations/$id/convert-to-pi', body);
+      await _load(reset: true);
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            regenerate
+                ? 'PI regenerated from quotation.'
+                : 'Quotation converted to PI.',
+          ),
+        ),
+      );
+
+      await Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const InvoicesScreen(proforma: true)),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Convert failed: $e')));
+    } finally {
+      if (mounted) {
+        setState(() => _convertingId = null);
+      }
+    }
+  }
+
+  Future<void> _exportQuotations(String type) async {
+    setState(() => _exporting = true);
+    try {
+      final bytes = await ApiService.downloadBytes('/quotations/export/$type');
+      final dir = await getTemporaryDirectory();
+      final file = File(
+        '${dir.path}${Platform.pathSeparator}quotations_export_$type.${type == 'pdf' ? 'pdf' : 'xlsx'}',
+      );
+      await file.writeAsBytes(bytes, flush: true);
+      final result = await OpenFilex.open(
+        file.path,
+        type: type == 'pdf'
+            ? 'application/pdf'
+            : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      );
+      if (!mounted) return;
+      if (result.type != ResultType.done) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Export saved to ${file.path}')));
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Export failed: $e')));
+    } finally {
+      if (mounted) {
+        setState(() => _exporting = false);
+      }
+    }
+  }
+
   List<dynamic> get _filtered {
     final q = _searchCtrl.text.trim().toLowerCase();
     if (q.isEmpty) return _items;
@@ -216,60 +323,6 @@ class _QuotationsScreenState extends State<QuotationsScreen> {
           _loadingMore = false;
         });
       }
-    }
-  }
-
-  Future<void> _openForm({Map<String, dynamic>? initial}) async {
-    final payload = await showDialog<Map<String, dynamic>>(
-      context: context,
-      builder: (_) => ResourceFormDialog(
-        title: initial == null ? 'Add Quotation' : 'Edit Quotation',
-        initialValues: initial,
-        fields: const [
-          ResourceFormField(
-            keyName: 'client',
-            label: 'Client Name',
-            requiredField: true,
-          ),
-          ResourceFormField(keyName: 'attention', label: 'Attention (Contact)'),
-          ResourceFormField(
-            keyName: 'quoteDate',
-            label: 'Quotation Date',
-            type: ResourceFieldType.date,
-          ),
-          ResourceFormField(keyName: 'notes', label: 'Notes'),
-          ResourceFormField(
-            keyName: 'status',
-            label: 'Status',
-            type: ResourceFieldType.select,
-            options: ['Draft', 'Sent', 'Approved', 'Rejected', 'Converted'],
-          ),
-        ],
-      ),
-    );
-
-    if (payload == null) return;
-
-    // Enrich with empty daySections & lineItems so the backend validator is satisfied.
-    final enriched = {
-      ...payload,
-      'leadId': payload['leadId'],
-      'daySections': <dynamic>[],
-      'lineItems': <dynamic>[],
-    };
-
-    try {
-      if (initial == null) {
-        await ApiService.post('/quotations', enriched);
-      } else {
-        await ApiService.put('/quotations/${initial['id']}', enriched);
-      }
-      await _load(reset: true);
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Save failed: $e')));
     }
   }
 
@@ -412,6 +465,32 @@ class _QuotationsScreenState extends State<QuotationsScreen> {
               ),
             ),
           ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+            child: Row(
+              children: [
+                OutlinedButton.icon(
+                  onPressed: _exporting ? null : () => _exportQuotations('pdf'),
+                  icon: _exporting
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.file_download_outlined, size: 16),
+                  label: const Text('Export PDF'),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: _exporting
+                      ? null
+                      : () => _exportQuotations('excel'),
+                  icon: const Icon(Icons.grid_on_outlined, size: 16),
+                  label: const Text('Export Excel'),
+                ),
+              ],
+            ),
+          ),
           if (_fromCache)
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 16),
@@ -511,6 +590,7 @@ class _QuotationsScreenState extends State<QuotationsScreen> {
     final attention = _stringValue(qt, 'attention', 'attention');
     final quoteDate = _stringValue(qt, 'quote_date', 'quoteDate');
     final status = _stringValue(qt, 'status', 'status');
+    final statusLower = status.toLowerCase();
     final total = _doubleValue(qt, 'total_amount', 'total');
     final summary = _serviceSummary(qt);
     final lineItems = _lineItemCount(qt);
@@ -659,6 +739,85 @@ class _QuotationsScreenState extends State<QuotationsScreen> {
                     : const Icon(Icons.picture_as_pdf_outlined, size: 15),
                 label: Text(
                   _downloadingId == quotationId ? 'Downloading' : 'PDF',
+                ),
+              ),
+              ElevatedButton.icon(
+                onPressed:
+                    quotationId == null ||
+                        _markingSentId == quotationId ||
+                        statusLower == 'sent' ||
+                        statusLower == 'converted'
+                    ? null
+                    : () => _markSent(qt),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFEAF2FF),
+                  foregroundColor: const Color(0xFF175CD3),
+                  elevation: 0,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
+                  minimumSize: const Size(0, 36),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  visualDensity: const VisualDensity(
+                    horizontal: -1,
+                    vertical: -1,
+                  ),
+                  textStyle: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+                icon: _markingSentId == quotationId
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.send_outlined, size: 15),
+                label: const Text('Mark Sent'),
+              ),
+              ElevatedButton.icon(
+                onPressed: quotationId == null || _convertingId == quotationId
+                    ? null
+                    : () => _convertToPi(
+                        qt,
+                        regenerate: statusLower == 'converted',
+                      ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFF3EEFF),
+                  foregroundColor: const Color(0xFF6941C6),
+                  elevation: 0,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
+                  minimumSize: const Size(0, 36),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  visualDensity: const VisualDensity(
+                    horizontal: -1,
+                    vertical: -1,
+                  ),
+                  textStyle: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+                icon: _convertingId == quotationId
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.transform_outlined, size: 15),
+                label: Text(
+                  statusLower == 'converted' ? 'Regenerate PI' : 'Convert PI',
                 ),
               ),
               ElevatedButton.icon(
