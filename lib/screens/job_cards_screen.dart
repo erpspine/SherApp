@@ -215,8 +215,8 @@ class _JobCardsScreenState extends State<JobCardsScreen> {
                   jobCard['fuel_used'] ??
                   '')
               .toString(),
-      'driverDetails':
-          (jobCard['driver_details'] ?? jobCard['driverDetails'] ?? '')
+      'driverAllowance':
+          (jobCard['driver_allowance'] ?? jobCard['driverAllowance'] ?? '')
               .toString(),
       'guideLanguage':
           (jobCard['guide_language'] ?? jobCard['guideLanguage'] ?? '')
@@ -400,6 +400,14 @@ class _JobCardsScreenState extends State<JobCardsScreen> {
     return fallback;
   }
 
+  Map<String, dynamic> _leadById(int leadId) {
+    if (leadId <= 0) return <String, dynamic>{};
+    return _leads.firstWhere(
+      (lead) => _toInt(lead['id'] ?? lead['lead_id']) == leadId,
+      orElse: () => <String, dynamic>{},
+    );
+  }
+
   Map<String, dynamic> _leaseAllocationById(int id) {
     if (id <= 0) return <String, dynamic>{};
     return _leaseAllocations.firstWhere(
@@ -533,6 +541,24 @@ class _JobCardsScreenState extends State<JobCardsScreen> {
   }
 
   Future<void> _openForm({Map<String, dynamic>? initial}) async {
+    String currentStartDate = (initial?['safariStartDate'] ?? '').toString();
+    String currentEndDate = (initial?['safariEndDate'] ?? '').toString();
+
+    void syncNumberOfDays(ResourceFieldValueSetter setValue) {
+      final computed = _daysFromRange(currentStartDate, currentEndDate);
+      if (computed > 0) {
+        setValue('numberOfDays', computed.toString());
+      }
+    }
+
+    void syncDriverAllowance(
+      List<Map<String, dynamic>> rows,
+      ResourceFieldValueSetter setValue,
+    ) {
+      final allowance = _sumItineraryAllowance(rows);
+      setValue('driverAllowance', allowance <= 0 ? '' : allowance.toString());
+    }
+
     final leadOptions =
         _leads
             .map((l) {
@@ -579,6 +605,24 @@ class _JobCardsScreenState extends State<JobCardsScreen> {
       builder: (_) => ResourceFormDialog(
         title: initial == null ? 'Add Job Card' : 'Edit Job Card',
         onFieldChanged: (fieldKey, value, setValue) {
+          if (fieldKey == 'safariStartDate') {
+            currentStartDate = (value ?? '').toString();
+            syncNumberOfDays(setValue);
+            return;
+          }
+
+          if (fieldKey == 'safariEndDate') {
+            currentEndDate = (value ?? '').toString();
+            syncNumberOfDays(setValue);
+            return;
+          }
+
+          if (fieldKey == 'itineraryLineItems') {
+            final rows = _itineraryRowsFromRaw(value);
+            syncDriverAllowance(rows, setValue);
+            return;
+          }
+
           if (fieldKey == 'type') {
             if (value == 'Safari') {
               setValue('leaseAllocationId', '');
@@ -592,10 +636,7 @@ class _JobCardsScreenState extends State<JobCardsScreen> {
             final selectedLeadId = _idFromOption(value);
             if (selectedLeadId <= 0) return;
 
-            final lead = _leads.firstWhere(
-              (l) => _toInt(l['id'] ?? l['lead_id']) == selectedLeadId,
-              orElse: () => <String, dynamic>{},
-            );
+            final lead = _leadById(selectedLeadId);
             final bookingRef = _firstNonEmpty([
               lead['booking_ref'],
               lead['bookingReferenceNo'],
@@ -611,21 +652,55 @@ class _JobCardsScreenState extends State<JobCardsScreen> {
               setValue('bookingReferenceNo', bookingRef);
             if (client.isNotEmpty) setValue('tourOperatorClientName', client);
 
+            final contactEmail = _firstNonEmpty([
+              lead['agent_email'],
+              lead['agentEmail'],
+            ]);
+            final nationality = _firstNonEmpty([
+              lead['client_country'],
+              lead['clientCountry'],
+            ]);
+            final safariStartDate = _firstNonEmpty([
+              lead['start_date'],
+              lead['startDate'],
+            ]);
+            final safariEndDate = _firstNonEmpty([
+              lead['end_date'],
+              lead['endDate'],
+            ]);
+            if (safariStartDate.isNotEmpty) {
+              currentStartDate = safariStartDate;
+              setValue('safariStartDate', safariStartDate);
+            }
+            if (safariEndDate.isNotEmpty) {
+              currentEndDate = safariEndDate;
+              setValue('safariEndDate', safariEndDate);
+            }
+            syncNumberOfDays(setValue);
+
             final quote = _latestQuotationForLead(selectedLeadId);
             if (quote.isNotEmpty) {
               final itineraryRows = _itineraryRowsFromQuotation(quote);
               if (itineraryRows.isNotEmpty) {
                 setValue('itineraryLineItems', itineraryRows);
+                syncDriverAllowance(itineraryRows, setValue);
               }
             }
 
+            final leadVehicleId = _toInt(
+              lead['vehicle_id'] ?? lead['vehicleId'],
+            );
             final alloc = _allocations.firstWhere(
               (a) => _toInt(a['lead_id'] ?? a['leadId']) == selectedLeadId,
               orElse: () => <String, dynamic>{},
             );
             final vid = _toInt(alloc['vehicle_id'] ?? alloc['vehicleId']);
-            if (vid > 0) {
-              setValue('vehicleId', _optionFromIdLabel(vid, vehicleOptions));
+            final resolvedVehicleId = vid > 0 ? vid : leadVehicleId;
+            if (resolvedVehicleId > 0) {
+              setValue(
+                'vehicleId',
+                _optionFromIdLabel(resolvedVehicleId, vehicleOptions),
+              );
             }
             return;
           }
@@ -661,24 +736,9 @@ class _JobCardsScreenState extends State<JobCardsScreen> {
               leadMap['client_name'],
               leadMap['clientName'],
             ]);
-            final vehicleNo = _firstNonEmpty([
-              allocation['vehicle_no'],
-              allocation['vehicleNo'],
-              vehicleMap['vehicle_no'],
-              vehicleMap['vehicleNo'],
-            ]);
-            final plate = _firstNonEmpty([
-              allocation['plate_no'],
-              allocation['plateNo'],
-              vehicleMap['plate_no'],
-              vehicleMap['plateNo'],
-            ]);
-
             if (bookingRef.isNotEmpty)
               setValue('bookingReferenceNo', bookingRef);
             if (client.isNotEmpty) setValue('tourOperatorClientName', client);
-            if (vehicleNo.isNotEmpty) setValue('vehicleNo', vehicleNo);
-            if (plate.isNotEmpty) setValue('vehiclePlateNo', plate);
 
             final vehicleId = _toInt(
               allocation['vehicle_id'] ??
@@ -699,6 +759,47 @@ class _JobCardsScreenState extends State<JobCardsScreen> {
               setValue('leadId', _optionFromIdLabel(leadId, leadOptions));
             }
 
+            final allocationStartDate = _firstNonEmpty([
+              allocation['start_date'],
+              allocation['startDate'],
+              contractMap['start_date'],
+              contractMap['startDate'],
+              leadMap['start_date'],
+              leadMap['startDate'],
+            ]);
+            final allocationEndDate = _firstNonEmpty([
+              allocation['end_date'],
+              allocation['endDate'],
+              contractMap['end_date'],
+              contractMap['endDate'],
+              leadMap['end_date'],
+              leadMap['endDate'],
+            ]);
+            final contactEmail = _firstNonEmpty([
+              allocation['contact_email'],
+              allocation['contactEmail'],
+              contractMap['contact_email'],
+              contractMap['contactEmail'],
+              leadMap['agent_email'],
+              leadMap['agentEmail'],
+            ]);
+            final nationality = _firstNonEmpty([
+              allocation['nationality'],
+              contractMap['nationality'],
+              leadMap['client_country'],
+              leadMap['clientCountry'],
+            ]);
+
+            if (allocationStartDate.isNotEmpty) {
+              currentStartDate = allocationStartDate;
+              setValue('safariStartDate', allocationStartDate);
+            }
+            if (allocationEndDate.isNotEmpty) {
+              currentEndDate = allocationEndDate;
+              setValue('safariEndDate', allocationEndDate);
+            }
+            syncNumberOfDays(setValue);
+
             final allocationItinerary =
                 allocation['itineraryItems'] ??
                 allocation['itinerary_items'] ??
@@ -707,6 +808,7 @@ class _JobCardsScreenState extends State<JobCardsScreen> {
             final itineraryRows = _itineraryRowsFromRaw(allocationItinerary);
             if (itineraryRows.isNotEmpty) {
               setValue('itineraryLineItems', itineraryRows);
+              syncDriverAllowance(itineraryRows, setValue);
             }
           }
         },
@@ -733,17 +835,9 @@ class _JobCardsScreenState extends State<JobCardsScreen> {
               .toString(),
           'tourOperatorClientName': (initial?['tourOperatorClientName'] ?? '')
               .toString(),
-          'contactPerson': (initial?['contactPerson'] ?? '').toString(),
-          'contactNumber': (initial?['contactNumber'] ?? '').toString(),
-          'contactEmail': (initial?['contactEmail'] ?? '').toString(),
-          'nationality': (initial?['nationality'] ?? '').toString(),
-          'timeOut': (initial?['timeOut'] ?? '').toString(),
-          'timeIn': (initial?['timeIn'] ?? '').toString(),
           'numberOfDays': (initial?['numberOfDays'] ?? '').toString(),
           'adults': (initial?['adults'] ?? '0').toString(),
           'children': (initial?['children'] ?? '0').toString(),
-          'reason': (initial?['reason'] ?? '').toString(),
-          'clientDetails': (initial?['clientDetails'] ?? '').toString(),
           'additionalDetails': (initial?['additionalDetails'] ?? '').toString(),
           'location': (initial?['location'] ?? '').toString(),
           'kms': (initial?['kms'] ?? '').toString(),
@@ -753,10 +847,8 @@ class _JobCardsScreenState extends State<JobCardsScreen> {
           'fuelGaugeIn': (initial?['fuelGaugeIn'] ?? '').toString(),
           'approximateFuelUsed': (initial?['approximateFuelUsed'] ?? '')
               .toString(),
-          'driverDetails': (initial?['driverDetails'] ?? '').toString(),
+          'driverAllowance': (initial?['driverAllowance'] ?? '').toString(),
           'guideLanguage': (initial?['guideLanguage'] ?? '').toString(),
-          'vehicleNo': (initial?['vehicleNo'] ?? '').toString(),
-          'vehiclePlateNo': (initial?['vehiclePlateNo'] ?? '').toString(),
         },
         fields: [
           const ResourceFormField(
@@ -823,11 +915,6 @@ class _JobCardsScreenState extends State<JobCardsScreen> {
             maxLines: 3,
           ),
           const ResourceFormField(
-            keyName: 'itineraryLineItems',
-            label: 'Itinerary (Line Items)',
-            type: ResourceFieldType.itinerary,
-          ),
-          const ResourceFormField(
             keyName: 'bookingReferenceNo',
             label: 'Booking Ref No',
           ),
@@ -836,46 +923,23 @@ class _JobCardsScreenState extends State<JobCardsScreen> {
             label: 'Tour Operator/Client',
           ),
           const ResourceFormField(
-            keyName: 'contactPerson',
-            label: 'Contact Person',
-          ),
-          const ResourceFormField(
-            keyName: 'contactNumber',
-            label: 'Contact Number',
-          ),
-          const ResourceFormField(
-            keyName: 'contactEmail',
-            label: 'Contact Email',
-          ),
-          const ResourceFormField(keyName: 'nationality', label: 'Nationality'),
-          const ResourceFormField(keyName: 'timeOut', label: 'Time Out'),
-          const ResourceFormField(keyName: 'timeIn', label: 'Time In'),
-          const ResourceFormField(
             keyName: 'numberOfDays',
             label: 'Number Of Days',
             type: ResourceFieldType.number,
           ),
-          const ResourceFormField(
+          ResourceFormField(
             keyName: 'adults',
             label: 'Adults',
             type: ResourceFieldType.number,
+            visibleWhenKey: 'type',
+            visibleWhenValues: ['Safari'],
           ),
-          const ResourceFormField(
+          ResourceFormField(
             keyName: 'children',
             label: 'Children',
             type: ResourceFieldType.number,
-          ),
-          const ResourceFormField(
-            keyName: 'reason',
-            label: 'Reason',
-            type: ResourceFieldType.textarea,
-            maxLines: 2,
-          ),
-          const ResourceFormField(
-            keyName: 'clientDetails',
-            label: 'Client Details',
-            type: ResourceFieldType.textarea,
-            maxLines: 2,
+            visibleWhenKey: 'type',
+            visibleWhenValues: ['Safari'],
           ),
           const ResourceFormField(
             keyName: 'additionalDetails',
@@ -883,49 +947,15 @@ class _JobCardsScreenState extends State<JobCardsScreen> {
             type: ResourceFieldType.textarea,
             maxLines: 2,
           ),
-          const ResourceFormField(keyName: 'location', label: 'Location'),
           const ResourceFormField(
-            keyName: 'kms',
-            label: 'KMs',
+            keyName: 'driverAllowance',
+            label: 'Driver Allowance',
             type: ResourceFieldType.number,
           ),
           const ResourceFormField(
-            keyName: 'odometerOut',
-            label: 'Odometer Out',
-            type: ResourceFieldType.number,
-          ),
-          const ResourceFormField(
-            keyName: 'odometerIn',
-            label: 'Odometer In',
-            type: ResourceFieldType.number,
-          ),
-          const ResourceFormField(
-            keyName: 'fuelGaugeOut',
-            label: 'Fuel Gauge Out',
-            type: ResourceFieldType.number,
-          ),
-          const ResourceFormField(
-            keyName: 'fuelGaugeIn',
-            label: 'Fuel Gauge In',
-            type: ResourceFieldType.number,
-          ),
-          const ResourceFormField(
-            keyName: 'approximateFuelUsed',
-            label: 'Approx Fuel Used',
-            type: ResourceFieldType.number,
-          ),
-          const ResourceFormField(
-            keyName: 'driverDetails',
-            label: 'Driver Details',
-          ),
-          const ResourceFormField(
-            keyName: 'guideLanguage',
-            label: 'Guide Language',
-          ),
-          const ResourceFormField(keyName: 'vehicleNo', label: 'Vehicle No'),
-          const ResourceFormField(
-            keyName: 'vehiclePlateNo',
-            label: 'Vehicle Plate No',
+            keyName: 'itineraryLineItems',
+            label: 'Itinerary (Line Items)',
+            type: ResourceFieldType.itinerary,
           ),
         ],
       ),
@@ -995,7 +1025,6 @@ class _JobCardsScreenState extends State<JobCardsScreen> {
         _hasReturnDetails(<String, dynamic>{
           'safariStartDate': startDate,
           'safariEndDate': endDate,
-          'timeIn': payload['timeIn'],
           'odometerIn': payload['odometerIn'],
           'fuelGaugeIn': payload['fuelGaugeIn'],
         })
@@ -1018,10 +1047,6 @@ class _JobCardsScreenState extends State<JobCardsScreen> {
       'safari_end_date': endDate,
       'numberOfDays': resolvedDays,
       'number_of_days': resolvedDays,
-      'timeOut': _nullIfEmpty(payload['timeOut']),
-      'time_out': _nullIfEmpty(payload['timeOut']),
-      'timeIn': _nullIfEmpty(payload['timeIn']),
-      'time_in': _nullIfEmpty(payload['timeIn']),
       'pickupLocation': _nullIfEmpty(payload['pickupLocation']),
       'dropoffLocation': _nullIfEmpty(payload['dropoffLocation']),
       'routeSummary': _nullIfEmpty(payload['routeSummary']),
@@ -1031,14 +1056,8 @@ class _JobCardsScreenState extends State<JobCardsScreen> {
       'additional_details': _nullIfEmpty(payload['additionalDetails']),
       'bookingReferenceNo': _nullIfEmpty(payload['bookingReferenceNo']),
       'tourOperatorClientName': _nullIfEmpty(payload['tourOperatorClientName']),
-      'contactPerson': _nullIfEmpty(payload['contactPerson']),
-      'contactNumber': _nullIfEmpty(payload['contactNumber']),
-      'contactEmail': _nullIfEmpty(payload['contactEmail']),
-      'nationality': _nullIfEmpty(payload['nationality']),
       'adults': _numberOrNull(payload['adults']) ?? 0,
       'children': _numberOrNull(payload['children']) ?? 0,
-      'reason': _nullIfEmpty(payload['reason']),
-      'clientDetails': _nullIfEmpty(payload['clientDetails']),
       'location': _nullIfEmpty(payload['location']),
       'kms': _numberOrNull(payload['kms']),
       'odometerOut': _numberOrNull(payload['odometerOut']),
@@ -1046,10 +1065,8 @@ class _JobCardsScreenState extends State<JobCardsScreen> {
       'fuelGaugeOut': _numberOrNull(payload['fuelGaugeOut']),
       'fuelGaugeIn': _numberOrNull(payload['fuelGaugeIn']),
       'approximateFuelUsed': _numberOrNull(payload['approximateFuelUsed']),
-      'driverDetails': _nullIfEmpty(payload['driverDetails']),
+      'driverAllowance': _numberOrNull(payload['driverAllowance']),
       'guideLanguage': _nullIfEmpty(payload['guideLanguage']),
-      'vehicleNo': _nullIfEmpty(payload['vehicleNo']),
-      'vehiclePlateNo': _nullIfEmpty(payload['vehiclePlateNo']),
     };
 
     setState(() => _saving = true);
@@ -1095,6 +1112,33 @@ class _JobCardsScreenState extends State<JobCardsScreen> {
     final text = (value ?? '').toString().trim();
     if (text.isEmpty) return null;
     return num.tryParse(text);
+  }
+
+  int _daysFromRange(String? startRaw, String? endRaw) {
+    final startText = (startRaw ?? '').trim();
+    final endText = (endRaw ?? '').trim();
+    if (startText.isEmpty || endText.isEmpty) return 0;
+
+    final start = DateTime.tryParse(startText);
+    final end = DateTime.tryParse(endText);
+    if (start == null || end == null) return 0;
+
+    final diff = end.difference(start).inDays + 1;
+    return diff > 0 ? diff : 0;
+  }
+
+  num _sumItineraryAllowance(List<Map<String, dynamic>> rows) {
+    num total = 0;
+    for (final row in rows) {
+      final allowanceRaw = row['allowancePerDay'] ?? row['allowance_per_day'];
+      final allowance = allowanceRaw is num
+          ? allowanceRaw
+          : num.tryParse((allowanceRaw ?? '').toString());
+      if (allowance != null) {
+        total += allowance;
+      }
+    }
+    return total;
   }
 
   Future<void> _viewCard(Map<String, dynamic> card) async {
@@ -1150,6 +1194,10 @@ class _JobCardsScreenState extends State<JobCardsScreen> {
               _kv(
                 'Client',
                 (normalized['tourOperatorClientName'] ?? '-').toString(),
+              ),
+              _kv(
+                'Driver Allowance',
+                (normalized['driverAllowance'] ?? '-').toString(),
               ),
             ],
           ),

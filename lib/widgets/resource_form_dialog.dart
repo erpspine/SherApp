@@ -157,11 +157,41 @@ class _ResourceFormDialogState extends State<ResourceFormDialog> {
     return rows;
   }
 
+  List<Map<String, dynamic>> _itineraryPayload(String key) {
+    final rows = _itineraryRows[key] ?? <_ItineraryRowControllers>[];
+    return rows
+        .map((row) {
+          final date = row.dateCtrl.text.trim();
+          final description = row.descriptionCtrl.text.trim();
+          final allowanceText = row.allowanceCtrl.text.trim();
+          final allowance = allowanceText.isEmpty
+              ? null
+              : num.tryParse(allowanceText);
+          return <String, dynamic>{
+            'date': date,
+            'dayDescription': description,
+            'allowancePerDay': allowance,
+          };
+        })
+        .where((row) {
+          final date = (row['date'] ?? '').toString().trim();
+          final description = (row['dayDescription'] ?? '').toString().trim();
+          final allowance = row['allowancePerDay'];
+          return date.isNotEmpty || description.isNotEmpty || allowance != null;
+        })
+        .toList();
+  }
+
+  void _notifyItineraryChanged(String key) {
+    widget.onFieldChanged?.call(key, _itineraryPayload(key), _setFieldValue);
+  }
+
   void _addItineraryRow(String key) {
     setState(() {
       _itineraryRows.putIfAbsent(key, () => <_ItineraryRowControllers>[]);
       _itineraryRows[key]!.add(_ItineraryRowControllers());
     });
+    _notifyItineraryChanged(key);
   }
 
   void _removeItineraryRow(String key, int index) {
@@ -173,6 +203,7 @@ class _ResourceFormDialogState extends State<ResourceFormDialog> {
       final row = rows.removeAt(index);
       row.dispose();
     });
+    _notifyItineraryChanged(key);
   }
 
   @override
@@ -358,6 +389,7 @@ class _ResourceFormDialogState extends State<ResourceFormDialog> {
       }
       _itineraryRows[key] = _buildItineraryRows(value);
       setState(() {});
+      _notifyItineraryChanged(key);
       return;
     }
 
@@ -627,6 +659,7 @@ class _ResourceFormDialogState extends State<ResourceFormDialog> {
                     const SizedBox(height: 8),
                     TextFormField(
                       controller: row.descriptionCtrl,
+                      onChanged: (_) => _notifyItineraryChanged(field.keyName),
                       decoration: _decoration(hintText: 'Day Description'),
                       validator: (value) {
                         if (!field.requiredField) return null;
@@ -647,6 +680,7 @@ class _ResourceFormDialogState extends State<ResourceFormDialog> {
                     const SizedBox(height: 8),
                     TextFormField(
                       controller: row.allowanceCtrl,
+                      onChanged: (_) => _notifyItineraryChanged(field.keyName),
                       keyboardType: const TextInputType.numberWithOptions(
                         decimal: true,
                       ),
@@ -795,6 +829,7 @@ class _ResourceFormDialogState extends State<ResourceFormDialog> {
       final formatted = selected.toIso8601String().split('T').first;
       controller.text = formatted;
       setState(() {});
+      widget.onFieldChanged?.call(fieldKey, formatted, _setFieldValue);
     }
   }
 
@@ -837,6 +872,7 @@ class _ResourceFormDialogState extends State<ResourceFormDialog> {
     if (selected != null) {
       controller.text = selected.toIso8601String().split('T').first;
       setState(() {});
+      _notifyItineraryChanged(fieldKey);
     }
   }
 

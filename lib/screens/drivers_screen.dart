@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../config/app_config.dart';
+import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
 import 'driver_trips_screen.dart';
 
@@ -15,6 +17,7 @@ class _DriversScreenState extends State<DriversScreen> {
   bool _loading = true;
   String? _error;
   bool _opened = false;
+  bool _showInlineLogs = false;
 
   @override
   void initState() {
@@ -48,7 +51,15 @@ class _DriversScreenState extends State<DriversScreen> {
         _error = null;
       });
 
-      if (!_opened) {
+      final auth = context.read<AuthProvider>();
+      final isOperations =
+          auth.hasRole('operations') || auth.hasRole('operator');
+      final isAdmin = auth.hasRole('admin');
+      final useInlineLogs = isOperations || isAdmin;
+
+      // Keep operations/admin users in the normal Home shell (drawer/bottom
+      // menu) instead of auto-navigating into a standalone route.
+      if (!_opened && !useInlineLogs) {
         _opened = true;
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted || _currentUser == null) return;
@@ -75,12 +86,24 @@ class _DriversScreenState extends State<DriversScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final auth = context.watch<AuthProvider>();
+    final isOperations = auth.hasRole('operations') || auth.hasRole('operator');
+    final isAdmin = auth.hasRole('admin');
+    final useInlineLogs = isOperations || isAdmin;
     final driverName =
         (_currentUser?['name'] ??
                 _currentUser?['full_name'] ??
                 _currentUser?['email'] ??
                 'Driver')
             .toString();
+
+    if (useInlineLogs && _showInlineLogs && _currentUser != null) {
+      return DriverTripsScreen(
+        driver: _currentUser!,
+        useCurrentAssignments: true,
+        embeddedInHome: true,
+      );
+    }
 
     return Scaffold(
       backgroundColor: Colors.transparent,
@@ -145,15 +168,21 @@ class _DriversScreenState extends State<DriversScreen> {
                       ),
                     ),
                     const SizedBox(height: 6),
-                    const Text(
-                      'Tap below to open your assigned safari movement log.',
+                    Text(
+                      useInlineLogs
+                          ? 'Tap below to open odometer logs inline and keep menus visible.'
+                          : 'Tap below to open your assigned safari movement log.',
                       textAlign: TextAlign.center,
-                      style: TextStyle(color: Color(0xFF64748B)),
+                      style: const TextStyle(color: Color(0xFF64748B)),
                     ),
                     const SizedBox(height: 14),
                     ElevatedButton.icon(
                       onPressed: () {
                         if (_currentUser == null) return;
+                        if (useInlineLogs) {
+                          setState(() => _showInlineLogs = true);
+                          return;
+                        }
                         Navigator.push(
                           context,
                           MaterialPageRoute(
@@ -170,7 +199,11 @@ class _DriversScreenState extends State<DriversScreen> {
                         elevation: 0,
                       ),
                       icon: const Icon(Icons.speed_outlined),
-                      label: const Text('Open My Movement Log'),
+                      label: Text(
+                        useInlineLogs
+                            ? 'Open Odometer Logs'
+                            : 'Open My Movement Log',
+                      ),
                     ),
                   ],
                 ),

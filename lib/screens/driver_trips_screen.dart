@@ -19,10 +19,12 @@ class DriverTripsScreen extends StatefulWidget {
     super.key,
     required this.driver,
     this.useCurrentAssignments = false,
+    this.embeddedInHome = false,
   });
 
   final Map<String, dynamic> driver;
   final bool useCurrentAssignments;
+  final bool embeddedInHome;
 
   @override
   State<DriverTripsScreen> createState() => _DriverTripsScreenState();
@@ -259,6 +261,8 @@ class _DriverTripsScreenState extends State<DriverTripsScreen> {
 
   void _showOdometerSheet(Map<String, dynamic> trip) {
     final tripId = trip['id'];
+    final auth = context.read<AuthProvider>();
+    final canRecord = !(auth.hasRole('operations') || auth.hasRole('operator'));
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -267,7 +271,8 @@ class _DriverTripsScreenState extends State<DriverTripsScreen> {
       // bottom area is handled per-button so the chrome can still extend
       // visually behind the gesture bar.
       useSafeArea: true,
-      builder: (_) => _OdometerSheet(trip: trip, tripId: tripId),
+      builder: (_) =>
+          _OdometerSheet(trip: trip, tripId: tripId, canRecord: canRecord),
     ).whenComplete(() {
       // Refresh both the server-side trip list (for synced-row counts) and
       // the local outbox so the per-trip "X entries recorded" badge stays
@@ -282,6 +287,102 @@ class _DriverTripsScreenState extends State<DriverTripsScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
+    final content = Scaffold(
+      backgroundColor: theme.colorScheme.background,
+      drawer: widget.embeddedInHome ? null : _buildDriverDrawer(theme),
+      appBar: AppBar(
+        backgroundColor: theme.colorScheme.surface,
+        elevation: 0,
+        leading: widget.embeddedInHome
+            ? null
+            : Builder(
+                builder: (context) => IconButton(
+                  icon: const Icon(Icons.menu_rounded),
+                  tooltip: 'Menu',
+                  onPressed: () => Scaffold.of(context).openDrawer(),
+                ),
+              ),
+        automaticallyImplyLeading: !widget.embeddedInHome,
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              _driverName,
+              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+            ),
+            Text(
+              widget.embeddedInHome
+                  ? 'Day-to-Day Safari Movement'
+                  : 'My Day-to-Day Safari Movement',
+              style: const TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+            ),
+          ],
+        ),
+        actions: const [_SyncStatusChip(), SizedBox(width: 8)],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(60),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+            child: TextField(
+              controller: _searchCtrl,
+              style: TextStyle(color: theme.colorScheme.onSurface),
+              decoration: const InputDecoration(
+                hintText: 'Search trips...',
+                prefixIcon: Icon(Icons.search, color: Color(0xFF64748B)),
+              ),
+            ),
+          ),
+        ),
+      ),
+      body: _loading
+          ? const Center(
+              child: CircularProgressIndicator(color: Color(kGoldColor)),
+            )
+          : RefreshIndicator(
+              onRefresh: _load,
+              color: const Color(kGoldColor),
+              child: Column(
+                children: [
+                  if (_isOfflineSnapshot) _offlineBanner(),
+                  Expanded(
+                    child: _filtered.isEmpty
+                        ? ListView(
+                            children: [
+                              const SizedBox(height: 120),
+                              Icon(
+                                Icons.route_outlined,
+                                size: 52,
+                                color: theme.colorScheme.onSurfaceVariant
+                                    .withOpacity(0.35),
+                              ),
+                              const SizedBox(height: 12),
+                              Center(
+                                child: Text(
+                                  'No trips found',
+                                  style: TextStyle(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          )
+                        : ListView.builder(
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            padding: const EdgeInsets.fromLTRB(16, 14, 16, 22),
+                            itemCount: _filtered.length,
+                            itemBuilder: (_, i) => _tripCard(_filtered[i]),
+                          ),
+                  ),
+                ],
+              ),
+            ),
+    );
+
+    if (widget.embeddedInHome) {
+      return content;
+    }
+
     // Drivers land directly on this screen after login, so the system back
     // button would otherwise close the app. Intercept it and confirm.
     return PopScope(
@@ -290,123 +391,14 @@ class _DriverTripsScreenState extends State<DriverTripsScreen> {
         if (didPop) return;
         final shouldExit = await _confirmExit();
         if (shouldExit && mounted) {
-          // Pop the route if we were actually pushed onto a stack…
           if (Navigator.of(context).canPop()) {
             Navigator.of(context).pop();
           } else {
-            // …otherwise drop back to the OS launcher.
             await SystemNavigator.pop();
           }
         }
       },
-      child: Scaffold(
-        backgroundColor: theme.colorScheme.background,
-        drawer: _buildDriverDrawer(theme),
-        appBar: AppBar(
-          backgroundColor: theme.colorScheme.surface,
-          elevation: 0,
-          leading: Builder(
-            builder: (context) => IconButton(
-              icon: const Icon(Icons.menu_rounded),
-              tooltip: 'Menu',
-              onPressed: () => Scaffold.of(context).openDrawer(),
-            ),
-          ),
-          title: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                _driverName,
-                style: const TextStyle(
-                  fontWeight: FontWeight.w700,
-                  fontSize: 16,
-                ),
-              ),
-              const Text(
-                'My Day-to-Day Safari Movement',
-                style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
-              ),
-            ],
-          ),
-          actions: const [_SyncStatusChip(), SizedBox(width: 8)],
-          bottom: PreferredSize(
-            preferredSize: const Size.fromHeight(60),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-              child: TextField(
-                controller: _searchCtrl,
-                style: TextStyle(color: theme.colorScheme.onSurface),
-                decoration: const InputDecoration(
-                  hintText: 'Search trips...',
-                  prefixIcon: Icon(Icons.search, color: Color(0xFF64748B)),
-                ),
-              ),
-            ),
-          ),
-        ),
-        body: _loading
-            ? const Center(
-                child: CircularProgressIndicator(color: Color(kGoldColor)),
-              )
-            : RefreshIndicator(
-                onRefresh: _load,
-                color: const Color(kGoldColor),
-                child: Column(
-                  children: [
-                    if (_isOfflineSnapshot) _offlineBanner(),
-                    Expanded(
-                      child: _filtered.isEmpty
-                          ? ListView(
-                              children: [
-                                const SizedBox(height: 100),
-                                Center(
-                                  child: Column(
-                                    children: [
-                                      Icon(
-                                        Icons.route_outlined,
-                                        size: 56,
-                                        color: theme
-                                            .colorScheme
-                                            .onSurfaceVariant
-                                            .withOpacity(0.4),
-                                      ),
-                                      const SizedBox(height: 16),
-                                      Text(
-                                        'No trips assigned yet',
-                                        style: TextStyle(
-                                          color: theme
-                                              .colorScheme
-                                              .onSurfaceVariant,
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 6),
-                                      Text(
-                                        'Trips assigned to $_driverName will\nappear here.',
-                                        textAlign: TextAlign.center,
-                                        style: const TextStyle(
-                                          color: Color(0xFF94A3B8),
-                                          fontSize: 13,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            )
-                          : ListView.builder(
-                              padding: const EdgeInsets.all(16),
-                              itemCount: _filtered.length,
-                              itemBuilder: (_, i) => _tripCard(
-                                _filtered[i] as Map<String, dynamic>,
-                              ),
-                            ),
-                    ),
-                  ],
-                ),
-              ),
-      ),
+      child: content,
     );
   }
 
@@ -1085,10 +1077,15 @@ class _DriverTripsScreenState extends State<DriverTripsScreen> {
 // ────────────────────────────────────────────────
 
 class _OdometerSheet extends StatefulWidget {
-  const _OdometerSheet({required this.trip, required this.tripId});
+  const _OdometerSheet({
+    required this.trip,
+    required this.tripId,
+    this.canRecord = true,
+  });
 
   final Map<String, dynamic> trip;
   final dynamic tripId;
+  final bool canRecord;
 
   @override
   State<_OdometerSheet> createState() => _OdometerSheetState();
@@ -1263,6 +1260,14 @@ class _OdometerSheetState extends State<_OdometerSheet> {
   }
 
   void _addEntry() {
+    if (!widget.canRecord) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Operations can view odometer logs only.'),
+        ),
+      );
+      return;
+    }
     // First reading on a fresh trip MUST be a Fuel-Up so every odometer
     // entry that follows is grouped under a known tank cycle.
     final defaultType = _hasAnyFuel ? 'Movement' : 'Fuel';
@@ -1280,6 +1285,7 @@ class _OdometerSheetState extends State<_OdometerSheet> {
   }
 
   void _editEntry(Map<String, dynamic> entry) {
+    if (!widget.canRecord) return;
     setState(() {
       _editingEntry = entry;
       // Legacy rows may still carry Start / Stop / End – fold them all
@@ -1356,6 +1362,7 @@ class _OdometerSheetState extends State<_OdometerSheet> {
   }
 
   Future<void> _saveEntry() async {
+    if (!widget.canRecord) return;
     if (!_entryFormKey.currentState!.validate()) return;
 
     final payload = <String, dynamic>{
@@ -1424,6 +1431,7 @@ class _OdometerSheetState extends State<_OdometerSheet> {
   }
 
   Future<void> _deleteEntry(Map<String, dynamic> entry) async {
+    if (!widget.canRecord) return;
     final ok = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -1619,9 +1627,33 @@ class _OdometerSheetState extends State<_OdometerSheet> {
                   ),
           ),
 
+          if (!widget.canRecord)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0F172A).withOpacity(0.06),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Text(
+                  'View only: operations can review odometer logs but cannot record entries.',
+                  style: TextStyle(
+                    color: Color(0xFF475569),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+
           // Add button (hidden while the inline editor owns the slot above –
           // the editor brings its own Cancel / Save row).
-          if (!_showEntryEditor)
+          if (!_showEntryEditor && widget.canRecord)
             Padding(
               // Stack the keyboard inset and the system gesture / nav-bar
               // inset so the CTA never hides under the on-screen nav icons
@@ -2519,28 +2551,28 @@ class _OdometerSheetState extends State<_OdometerSheet> {
               ),
             ),
 
-          // Edit / Delete
-          Column(
-            children: [
-              GestureDetector(
-                onTap: () => _editEntry(entry),
-                child: Icon(
-                  Icons.edit_outlined,
-                  size: 18,
-                  color: theme.colorScheme.onSurfaceVariant,
+          if (widget.canRecord)
+            Column(
+              children: [
+                GestureDetector(
+                  onTap: () => _editEntry(entry),
+                  child: Icon(
+                    Icons.edit_outlined,
+                    size: 18,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 6),
-              GestureDetector(
-                onTap: () => _deleteEntry(entry),
-                child: const Icon(
-                  Icons.delete_outline,
-                  size: 18,
-                  color: Colors.redAccent,
+                const SizedBox(height: 6),
+                GestureDetector(
+                  onTap: () => _deleteEntry(entry),
+                  child: const Icon(
+                    Icons.delete_outline,
+                    size: 18,
+                    color: Colors.redAccent,
+                  ),
                 ),
-              ),
-            ],
-          ),
+              ],
+            ),
         ],
       ),
     );
