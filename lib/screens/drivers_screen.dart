@@ -100,8 +100,9 @@ class _DriversScreenState extends State<DriversScreen> {
     if (useInlineLogs && _showInlineLogs && _currentUser != null) {
       return DriverTripsScreen(
         driver: _currentUser!,
-        useCurrentAssignments: true,
+        useCurrentAssignments: false,
         embeddedInHome: true,
+        viewAllTrips: true,
       );
     }
 

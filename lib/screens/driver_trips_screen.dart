@@ -20,11 +20,13 @@ class DriverTripsScreen extends StatefulWidget {
     required this.driver,
     this.useCurrentAssignments = false,
     this.embeddedInHome = false,
+    this.viewAllTrips = false,
   });
 
   final Map<String, dynamic> driver;
   final bool useCurrentAssignments;
   final bool embeddedInHome;
+  final bool viewAllTrips;
 
   @override
   State<DriverTripsScreen> createState() => _DriverTripsScreenState();
@@ -138,6 +140,11 @@ class _DriverTripsScreenState extends State<DriverTripsScreen> {
   }
 
   Future<void> _load() async {
+    final cacheUseCurrentAssignments = widget.viewAllTrips
+        ? false
+        : widget.useCurrentAssignments;
+    final cacheDriverId = widget.viewAllTrips ? null : _driverId;
+
     // Only show the full-screen spinner on a cold start when we have nothing
     // to display. Refreshes (pull-to-refresh, post-sync auto-refresh, etc.)
     // keep the existing list on screen so it never appears to "disappear"
@@ -151,14 +158,14 @@ class _DriverTripsScreenState extends State<DriverTripsScreen> {
     // cold-start with no connectivity. The live fetch below will replace it
     // when the network comes back.
     final cached = await TripsCacheService.read(
-      useCurrentAssignments: widget.useCurrentAssignments,
-      driverId: _driverId,
+      useCurrentAssignments: cacheUseCurrentAssignments,
+      driverId: cacheDriverId,
     );
     if (!mounted) return;
     if (cached != null && cached.isNotEmpty && _trips.isEmpty) {
       final stamp = await TripsCacheService.savedAt(
-        useCurrentAssignments: widget.useCurrentAssignments,
-        driverId: _driverId,
+        useCurrentAssignments: cacheUseCurrentAssignments,
+        driverId: cacheDriverId,
       );
       if (!mounted) return;
       setState(() {
@@ -177,7 +184,9 @@ class _DriverTripsScreenState extends State<DriverTripsScreen> {
       // to the authenticated driver's own vehicle assignments. The fallback
       // `fetchDriverTrips(id)` is only reachable when an admin viewer is
       // browsing a specific driver. Drivers never see other vehicles.
-      final data = widget.useCurrentAssignments
+      final data = widget.viewAllTrips
+          ? await ApiService.fetchList('/safari-allocations')
+          : widget.useCurrentAssignments
           ? await ApiService.fetchMyAssignedTrips()
           : id != null
           ? await ApiService.fetchDriverTrips(id)
@@ -205,8 +214,8 @@ class _DriverTripsScreenState extends State<DriverTripsScreen> {
         unawaited(
           TripsCacheService.save(
             data,
-            useCurrentAssignments: widget.useCurrentAssignments,
-            driverId: id,
+            useCurrentAssignments: cacheUseCurrentAssignments,
+            driverId: cacheDriverId,
           ),
         );
       }
@@ -218,14 +227,14 @@ class _DriverTripsScreenState extends State<DriverTripsScreen> {
       // the outbox.
       if (_trips.isEmpty) {
         final fallback = await TripsCacheService.read(
-          useCurrentAssignments: widget.useCurrentAssignments,
-          driverId: _driverId,
+          useCurrentAssignments: cacheUseCurrentAssignments,
+          driverId: cacheDriverId,
         );
         if (!mounted) return;
         if (fallback != null && fallback.isNotEmpty) {
           final stamp = await TripsCacheService.savedAt(
-            useCurrentAssignments: widget.useCurrentAssignments,
-            driverId: _driverId,
+            useCurrentAssignments: cacheUseCurrentAssignments,
+            driverId: cacheDriverId,
           );
           if (!mounted) return;
           setState(() {
@@ -262,7 +271,10 @@ class _DriverTripsScreenState extends State<DriverTripsScreen> {
   void _showOdometerSheet(Map<String, dynamic> trip) {
     final tripId = trip['id'];
     final auth = context.read<AuthProvider>();
-    final canRecord = !(auth.hasRole('operations') || auth.hasRole('operator'));
+    final canRecord =
+        !(auth.hasRole('operations') ||
+            auth.hasRole('operator') ||
+            auth.hasRole('admin'));
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
