@@ -311,6 +311,36 @@ class ApiService {
     };
   }
 
+  static Future<Map<String, dynamic>> requestPasswordReset(
+    String identifier,
+  ) async {
+    final data = await post('/forgot-password', {
+      'identifier': identifier,
+    }, auth: false);
+
+    if (data is Map<String, dynamic>) return data;
+    if (data is Map) return Map<String, dynamic>.from(data);
+    return <String, dynamic>{};
+  }
+
+  static Future<Map<String, dynamic>> resetPassword({
+    required String identifier,
+    required String token,
+    required String password,
+    required String passwordConfirmation,
+  }) async {
+    final data = await post('/reset-password', {
+      'identifier': identifier,
+      'token': token,
+      'password': password,
+      'password_confirmation': passwordConfirmation,
+    }, auth: false);
+
+    if (data is Map<String, dynamic>) return data;
+    if (data is Map) return Map<String, dynamic>.from(data);
+    return <String, dynamic>{};
+  }
+
   /// Calls `/me` using the current token and synchronizes local cached user,
   /// roles, and permissions with what the backend reports.
   static Future<Map<String, dynamic>?> refreshMeCache() async {
