@@ -700,9 +700,25 @@ class ApiService {
   }
 
   static Future<List<dynamic>> fetchMyAssignedTrips() async {
+    final assignments = <dynamic>[];
+    Object? safariError;
+
     try {
-      return await fetchList('/safari-allocations');
+      assignments.addAll(await fetchList('/safari-allocations'));
+    } catch (error) {
+      safariError = error;
+    }
+
+    try {
+      assignments.addAll(await fetchList('/my-lease-allocations'));
     } catch (_) {
+      // Keep short-term trips usable while deploying against an older backend
+      // that does not have the driver lease feed yet.
+    }
+
+    if (assignments.isNotEmpty) return assignments;
+
+    if (safariError != null) {
       final user = await getCurrentUser();
       final raw =
           user?['id'] ??
@@ -710,9 +726,14 @@ class ApiService {
           user?['userId'] ??
           user?['driverId'];
       final id = raw is int ? raw : int.tryParse(raw?.toString() ?? '');
-      if (id == null) return <dynamic>[];
-      return _fetchDriverTripsWithFallback(id);
+      if (id != null) {
+        final fallback = await _fetchDriverTripsWithFallback(id);
+        if (fallback.isNotEmpty) return fallback;
+      }
+      throw safariError;
     }
+
+    return assignments;
   }
 
   // ── Odometer logs ───────────────────────────────────────────────────────────

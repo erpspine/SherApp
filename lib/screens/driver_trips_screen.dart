@@ -106,11 +106,13 @@ class _DriverTripsScreenState extends State<DriverTripsScreen> {
     if (q.isEmpty) return _trips;
     return _trips.where((t) {
       final lead = t['lead'];
+      final contract = t['contract'];
       final ref =
           (t['booking_ref'] ??
                   t['bookingRef'] ??
                   t['ref'] ??
                   (lead is Map ? lead['bookingRef'] : null) ??
+                  (contract is Map ? contract['groupName'] : null) ??
                   '')
               .toString()
               .toLowerCase();
@@ -119,6 +121,7 @@ class _DriverTripsScreenState extends State<DriverTripsScreen> {
                   t['clientCompany'] ??
                   t['client'] ??
                   (lead is Map ? lead['clientCompany'] : null) ??
+                  (contract is Map ? contract['clientName'] : null) ??
                   '')
               .toString()
               .toLowerCase();
@@ -128,6 +131,7 @@ class _DriverTripsScreenState extends State<DriverTripsScreen> {
                   t['route_parks'] ??
                   t['routeParks'] ??
                   (lead is Map ? lead['routeParks'] : null) ??
+                  t['itinerary'] ??
                   '')
               .toString()
               .toLowerCase();
@@ -663,17 +667,23 @@ class _DriverTripsScreenState extends State<DriverTripsScreen> {
   Widget _tripCard(Map<String, dynamic> trip) {
     final theme = Theme.of(context);
     final lead = trip['lead'];
+    final contract = trip['contract'];
+    final isLongTermLease = trip['assignmentType'] == 'long_term_lease';
     final ref =
         trip['booking_ref'] ??
         trip['bookingRef'] ??
         trip['ref'] ??
         (lead is Map ? lead['bookingRef'] : null) ??
+        trip['groupName'] ??
+        (contract is Map ? contract['groupName'] : null) ??
+        (isLongTermLease ? 'Lease #${trip['id']}' : null) ??
         '-';
     final client =
         trip['client_company'] ??
         trip['clientCompany'] ??
         trip['client'] ??
         (lead is Map ? lead['clientCompany'] : null) ??
+        (contract is Map ? contract['clientName'] : null) ??
         '-';
     final route =
         trip['route'] ??
@@ -681,6 +691,7 @@ class _DriverTripsScreenState extends State<DriverTripsScreen> {
         trip['routeParks'] ??
         trip['destination'] ??
         (lead is Map ? lead['routeParks'] : null) ??
+        trip['itinerary'] ??
         'Route not specified';
     final status = trip['status'] ?? 'Pending';
     final startDate =
@@ -852,70 +863,92 @@ class _DriverTripsScreenState extends State<DriverTripsScreen> {
             ),
           ),
 
-          // Odometer summary strip
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFFF5DB),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(
-                  color: const Color(kGoldColor).withOpacity(0.3),
+          if (isLongTermLease)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Chip(
+                  avatar: const Icon(Icons.car_rental_outlined, size: 16),
+                  label: Text(
+                    (contract is Map ? contract['leaseType'] : null)
+                            ?.toString() ??
+                        'Long-Term Lease',
+                  ),
                 ),
               ),
-              child: Row(
-                children: [
-                  const Icon(
-                    Icons.speed_outlined,
-                    size: 16,
-                    color: Color(kGoldColor),
+            ),
+
+          // Odometer logs currently belong to safari allocations. Do not send
+          // a lease-allocation id to the safari odometer endpoint.
+          if (!isLongTermLease)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF5DB),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: const Color(kGoldColor).withOpacity(0.3),
                   ),
-                  const SizedBox(width: 8),
-                  Text(
-                    odometerCount == 0
-                        ? 'No odometer entries yet'
-                        : '$odometerCount odometer entr${odometerCount == 1 ? 'y' : 'ies'} recorded',
-                    style: const TextStyle(
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.speed_outlined,
+                      size: 16,
                       color: Color(kGoldColor),
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
                     ),
-                  ),
-                ],
+                    const SizedBox(width: 8),
+                    Text(
+                      odometerCount == 0
+                          ? 'No odometer entries yet'
+                          : '$odometerCount odometer entr${odometerCount == 1 ? 'y' : 'ies'} recorded',
+                      style: const TextStyle(
+                        color: Color(kGoldColor),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
 
           // Fuel-cycle summary (only when we have at least one Fuel event in
           // the trip's embedded log). Surfaces current-tank progress and the
           // last completed tank's average km/litre at a glance.
-          _fuelCycleSummary(trip),
+          if (!isLongTermLease) _fuelCycleSummary(trip),
 
           // Actions
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-            child: SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: () => _showOdometerSheet(trip),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(kGoldColor),
-                  foregroundColor: Colors.white,
-                  elevation: 0,
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
+          if (!isLongTermLease)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+              child: SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () => _showOdometerSheet(trip),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(kGoldColor),
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                   ),
-                ),
-                icon: const Icon(Icons.speed_outlined, size: 18),
-                label: const Text(
-                  'Odometer Log',
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                  icon: const Icon(Icons.speed_outlined, size: 18),
+                  label: const Text(
+                    'Odometer Log',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                  ),
                 ),
               ),
             ),
-          ),
         ],
       ),
     );

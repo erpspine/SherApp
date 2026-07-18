@@ -20,7 +20,8 @@ class _LoginScreenState extends State<LoginScreen> {
   final _passCtrl = TextEditingController();
 
   bool _obscure = true;
-  bool _rememberMe = false;
+  // Persist sessions by default. Users can still opt out explicitly.
+  bool _rememberMe = true;
   bool _busy = false;
   String? _emailError;
   String? _passError;

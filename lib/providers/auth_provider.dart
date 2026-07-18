@@ -46,6 +46,10 @@ class AuthProvider extends ChangeNotifier {
     } else {
       _loggedIn = hasToken;
       if (hasToken) {
+        // Restore the cached authorization state first. A temporary network
+        // failure during startup must not turn into a logout.
+        _roles = await ApiService.getRoles();
+        _permissions = await ApiService.getPermissions();
         try {
           final me = await ApiService.refreshMeCache();
           final r = me?['roles'];
@@ -54,13 +58,22 @@ class AuthProvider extends ChangeNotifier {
           _permissions = p is List
               ? p.map((e) => e.toString()).toList()
               : const [];
-        } catch (_) {
-          // If the token is stale/invalid, drop the session so the app does
-          // not continue under a mismatched cached identity.
+        } on ApiException catch (e) {
+          // Only an explicit unauthenticated response proves the stored token
+          // is invalid. Server and connectivity errors should leave the
+          // persisted session intact so the app can recover when online.
+          if (e.statusCode != 401) {
+            _loading = false;
+            notifyListeners();
+            return;
+          }
           await ApiService.clearAuthSession();
           _loggedIn = false;
           _roles = const <String>[];
           _permissions = const <String>[];
+        } catch (_) {
+          // Keep the cached session when startup validation cannot reach the
+          // API. Subsequent authenticated requests will validate it normally.
         }
       }
     }
