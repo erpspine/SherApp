@@ -107,6 +107,14 @@ class _DriverTripsScreenState extends State<DriverTripsScreen> {
     return _trips.where((t) {
       final lead = t['lead'];
       final contract = t['contract'];
+      final groupName =
+          (t['group_name'] ??
+                  t['groupName'] ??
+                  (lead is Map ? lead['groupName'] : null) ??
+                  (contract is Map ? contract['groupName'] : null) ??
+                  '')
+              .toString()
+              .toLowerCase();
       final ref =
           (t['booking_ref'] ??
                   t['bookingRef'] ??
@@ -138,6 +146,7 @@ class _DriverTripsScreenState extends State<DriverTripsScreen> {
       final status = (t['status'] ?? '').toString().toLowerCase();
       return ref.contains(q) ||
           client.contains(q) ||
+          groupName.contains(q) ||
           route.contains(q) ||
           status.contains(q);
     }).toList();
@@ -273,7 +282,9 @@ class _DriverTripsScreenState extends State<DriverTripsScreen> {
   }
 
   void _showOdometerSheet(Map<String, dynamic> trip) {
-    final tripId = trip['id'];
+    final tripId = trip['assignmentType'] == 'long_term_lease'
+        ? 'lease:${trip['id']}'
+        : trip['id'];
     final auth = context.read<AuthProvider>();
     final canRecord =
         !(auth.hasRole('operations') ||
@@ -669,6 +680,12 @@ class _DriverTripsScreenState extends State<DriverTripsScreen> {
     final lead = trip['lead'];
     final contract = trip['contract'];
     final isLongTermLease = trip['assignmentType'] == 'long_term_lease';
+    final groupName =
+        trip['group_name'] ??
+        trip['groupName'] ??
+        (lead is Map ? lead['groupName'] : null) ??
+        (contract is Map ? contract['groupName'] : null) ??
+        '';
     final ref =
         trip['booking_ref'] ??
         trip['bookingRef'] ??
@@ -685,26 +702,34 @@ class _DriverTripsScreenState extends State<DriverTripsScreen> {
         (lead is Map ? lead['clientCompany'] : null) ??
         (contract is Map ? contract['clientName'] : null) ??
         '-';
-    final route =
-        trip['route'] ??
-        trip['route_parks'] ??
-        trip['routeParks'] ??
-        trip['destination'] ??
-        (lead is Map ? lead['routeParks'] : null) ??
-        trip['itinerary'] ??
-        'Route not specified';
+    final route = _formatItinerary(
+      trip['route'] ??
+          trip['route_parks'] ??
+          trip['routeParks'] ??
+          trip['destination'] ??
+          (lead is Map ? lead['routeParks'] : null) ??
+          trip['itinerary'] ??
+          'Route not specified',
+    );
     final status = trip['status'] ?? 'Pending';
-    final startDate =
-        trip['start_date'] ??
-        trip['startDate'] ??
-        (lead is Map ? lead['startDate'] : null) ??
-        '';
-    final endDate =
-        trip['end_date'] ??
-        trip['endDate'] ??
-        (lead is Map ? lead['endDate'] : null) ??
-        '';
+    final startDate = _formatTripDate(
+      trip['start_date'] ??
+          trip['startDate'] ??
+          (lead is Map ? lead['startDate'] : null) ??
+          '',
+    );
+    final endDate = _formatTripDate(
+      trip['end_date'] ??
+          trip['endDate'] ??
+          (lead is Map ? lead['endDate'] : null) ??
+          '',
+    );
     final vehicleMap = trip['vehicle'];
+    final itinerary = _formatItinerary(
+      trip['itineraryItems'] ??
+          trip['itinerary_items'] ??
+          (lead is Map ? lead['daySections'] ?? lead['itinerary'] : null),
+    );
     final vehicle = vehicleMap is Map
         ? '${vehicleMap['make'] ?? ''} ${vehicleMap['model'] ?? ''} ${(vehicleMap['plateNo'] ?? vehicleMap['vehicleNo'] ?? '').toString().trim()}'
               .trim()
@@ -729,7 +754,9 @@ class _DriverTripsScreenState extends State<DriverTripsScreen> {
     }
     // Add any locally-queued readings for this trip so the list reflects
     // them immediately, even before the outbox uploads.
-    final tripIdStr = (trip['id'] ?? trip['safari_allocation_id'])?.toString();
+    final tripIdStr = isLongTermLease
+        ? 'lease:${trip['id']}'
+        : (trip['id'] ?? trip['safari_allocation_id'])?.toString();
     if (tripIdStr != null && tripIdStr.isNotEmpty) {
       for (final p in _outboxEntries) {
         if (p.tripId == tripIdStr) odometerCount += 1;
@@ -752,60 +779,180 @@ class _DriverTripsScreenState extends State<DriverTripsScreen> {
         statusColor = const Color(kGoldColor);
     }
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 14),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: theme.colorScheme.outline, width: 0.8),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
+        onTap: () => _showOdometerSheet(trip),
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 14),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surface,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: theme.colorScheme.outline, width: 0.8),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.04),
+                blurRadius: 10,
+                offset: const Offset(0, 2),
+              ),
+            ],
           ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Trip header
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
-            child: Row(
-              children: [
-                Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [Color(kGoldColor), Color(0xFFE6B800)],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Trip header
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          colors: [Color(kGoldColor), Color(0xFFE6B800)],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(
+                        Icons.route_outlined,
+                        color: Colors.white,
+                        size: 20,
+                      ),
                     ),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Icon(
-                    Icons.route_outlined,
-                    color: Colors.white,
-                    size: 20,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        ref.toString(),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            ref.toString(),
+                            style: TextStyle(
+                              color: theme.colorScheme.onSurface,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 14,
+                            ),
+                          ),
+                          Text(
+                            client.toString(),
+                            style: const TextStyle(
+                              color: Color(kGoldColor),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: statusColor.withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        status.toString(),
                         style: TextStyle(
-                          color: theme.colorScheme.onSurface,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 14,
+                          color: statusColor,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
+                    ),
+                  ],
+                ),
+              ),
+
+              // Trip details
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+                child: Column(
+                  children: [
+                    if (groupName.toString().trim().isNotEmpty)
+                      _infoRow(
+                        Icons.groups_outlined,
+                        'Group: ${groupName.toString().trim()}',
+                        theme,
+                      ),
+                    if (route.isNotEmpty)
+                      _infoRow(
+                        Icons.location_on_outlined,
+                        route.toString(),
+                        theme,
+                      ),
+                    if (startDate.isNotEmpty || endDate.isNotEmpty)
+                      _infoRow(
+                        Icons.calendar_today_outlined,
+                        [
+                          startDate,
+                          endDate,
+                        ].where((s) => s.toString().isNotEmpty).join(' → '),
+                        theme,
+                      ),
+                    if (vehicle.toString().isNotEmpty)
+                      _infoRow(
+                        Icons.directions_car_outlined,
+                        vehicle.toString(),
+                        theme,
+                      ),
+                    if (itinerary.isNotEmpty)
+                      _infoRow(
+                        Icons.map_outlined,
+                        'Itinerary: $itinerary',
+                        theme,
+                      ),
+                  ],
+                ),
+              ),
+
+              if (isLongTermLease)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Chip(
+                      avatar: const Icon(Icons.car_rental_outlined, size: 16),
+                      label: Text(
+                        (contract is Map ? contract['leaseType'] : null)
+                                ?.toString() ??
+                            'Long-Term Lease',
+                      ),
+                    ),
+                  ),
+                ),
+
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFF5DB),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: const Color(kGoldColor).withOpacity(0.3),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.speed_outlined,
+                        size: 16,
+                        color: Color(kGoldColor),
+                      ),
+                      const SizedBox(width: 8),
                       Text(
-                        client.toString(),
+                        odometerCount == 0
+                            ? 'No odometer entries yet'
+                            : '$odometerCount odometer entr${odometerCount == 1 ? 'y' : 'ies'} recorded',
                         style: const TextStyle(
                           color: Color(kGoldColor),
                           fontSize: 12,
@@ -815,143 +962,85 @@ class _DriverTripsScreenState extends State<DriverTripsScreen> {
                     ],
                   ),
                 ),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: statusColor.withOpacity(0.12),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(
-                    status.toString(),
-                    style: TextStyle(
-                      color: statusColor,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // Trip details
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-            child: Column(
-              children: [
-                if (route.isNotEmpty)
-                  _infoRow(Icons.location_on_outlined, route.toString(), theme),
-                if (startDate.isNotEmpty || endDate.isNotEmpty)
-                  _infoRow(
-                    Icons.calendar_today_outlined,
-                    [
-                      startDate,
-                      endDate,
-                    ].where((s) => s.toString().isNotEmpty).join(' → '),
-                    theme,
-                  ),
-                if (vehicle.toString().isNotEmpty)
-                  _infoRow(
-                    Icons.directions_car_outlined,
-                    vehicle.toString(),
-                    theme,
-                  ),
-              ],
-            ),
-          ),
-
-          if (isLongTermLease)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Chip(
-                  avatar: const Icon(Icons.car_rental_outlined, size: 16),
-                  label: Text(
-                    (contract is Map ? contract['leaseType'] : null)
-                            ?.toString() ??
-                        'Long-Term Lease',
-                  ),
-                ),
               ),
-            ),
 
-          // Odometer logs currently belong to safari allocations. Do not send
-          // a lease-allocation id to the safari odometer endpoint.
-          if (!isLongTermLease)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 8,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFF5DB),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                    color: const Color(kGoldColor).withOpacity(0.3),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.speed_outlined,
-                      size: 16,
-                      color: Color(kGoldColor),
+              // Fuel-cycle summary (only when we have at least one Fuel event in
+              // the trip's embedded log). Surfaces current-tank progress and the
+              // last completed tank's average km/litre at a glance.
+              _fuelCycleSummary(trip),
+
+              // Actions
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () => _showOdometerSheet(trip),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(kGoldColor),
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                     ),
-                    const SizedBox(width: 8),
-                    Text(
-                      odometerCount == 0
-                          ? 'No odometer entries yet'
-                          : '$odometerCount odometer entr${odometerCount == 1 ? 'y' : 'ies'} recorded',
-                      style: const TextStyle(
-                        color: Color(kGoldColor),
-                        fontSize: 12,
+                    icon: const Icon(Icons.speed_outlined, size: 18),
+                    label: const Text(
+                      'Open Fuel & Mileage Trip',
+                      style: TextStyle(
+                        fontSize: 14,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
-                  ],
-                ),
-              ),
-            ),
-
-          // Fuel-cycle summary (only when we have at least one Fuel event in
-          // the trip's embedded log). Surfaces current-tank progress and the
-          // last completed tank's average km/litre at a glance.
-          if (!isLongTermLease) _fuelCycleSummary(trip),
-
-          // Actions
-          if (!isLongTermLease)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-              child: SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: () => _showOdometerSheet(trip),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(kGoldColor),
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                  icon: const Icon(Icons.speed_outlined, size: 18),
-                  label: const Text(
-                    'Odometer Log',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
                   ),
                 ),
               ),
-            ),
-        ],
+            ],
+          ),
+        ),
       ),
     );
+  }
+
+  String _formatTripDate(dynamic value) {
+    final raw = value?.toString().trim() ?? '';
+    if (raw.isEmpty) return '';
+    final parsed = DateTime.tryParse(raw);
+    if (parsed == null) return raw;
+    String two(int number) => number.toString().padLeft(2, '0');
+    return '${two(parsed.day)}/${two(parsed.month)}/${parsed.year}';
+  }
+
+  String _formatItinerary(dynamic value) {
+    if (value is! List) return value?.toString().trim() ?? '';
+    final rows = <String>[];
+    for (final item in value) {
+      if (item is! Map) continue;
+      final title =
+          item['date'] ??
+          item['dayDate'] ??
+          item['day_date'] ??
+          item['dayTitle'];
+      final date = _formatTripDate(title);
+      final details =
+          (item['details'] ??
+                  item['description'] ??
+                  item['dayDescription'] ??
+                  item['route'] ??
+                  item['title'] ??
+                  '')
+              .toString()
+              .trim();
+      if (date.isNotEmpty && details.isNotEmpty) {
+        rows.add('$date — $details');
+      } else if (date.isNotEmpty) {
+        rows.add(date);
+      } else if (details.isNotEmpty) {
+        rows.add(details);
+      }
+    }
+    return rows.isEmpty ? 'Itinerary not specified' : rows.join('  •  ');
   }
 
   Widget _infoRow(IconData icon, String text, ThemeData theme) {
@@ -1025,9 +1114,11 @@ class _DriverTripsScreenState extends State<DriverTripsScreen> {
         .where(
           (e) =>
               (e['entry_type'] ?? e['entryType'] ?? '')
-                  .toString()
-                  .toLowerCase() ==
-              'fuel',
+                      .toString()
+                      .toLowerCase() ==
+                  'fuel' &&
+              (e['fuel_fill_type'] ?? e['fuelFillType'] ?? 'full_tank') !=
+                  'extra',
         )
         .toList();
 
@@ -1151,6 +1242,7 @@ class _OdometerSheetState extends State<_OdometerSheet> {
   final _litersCtrl = TextEditingController();
   final _unitPriceCtrl = TextEditingController();
   String _entryType = 'Movement';
+  bool get _isFuelEntry => _entryType == 'Fuel' || _entryType == 'ExtraFuel';
   final ImagePicker _imagePicker = ImagePicker();
 
   /// Local path of the odometer photo attached to the in-progress entry.
@@ -1255,12 +1347,21 @@ class _OdometerSheetState extends State<_OdometerSheet> {
   /// requires a Fuel entry to open the first tank cycle before any other
   /// readings can be recorded.
   bool get _hasAnyFuel {
-    bool isFuel(dynamic v) => (v ?? '').toString().toLowerCase() == 'fuel';
+    bool isFullTankFuel(Map<String, dynamic> value) {
+      final type = (value['entry_type'] ?? value['entryType'] ?? '')
+          .toString()
+          .toLowerCase();
+      final fill =
+          (value['fuel_fill_type'] ?? value['fuelFillType'] ?? 'full_tank')
+              .toString();
+      return type == 'fuel' && fill != 'extra';
+    }
+
     for (final e in _entries) {
-      if (isFuel(e['entry_type'] ?? e['entryType'])) return true;
+      if (isFullTankFuel(e)) return true;
     }
     for (final p in _pending) {
-      if (isFuel(p.payload['entry_type'])) return true;
+      if (isFullTankFuel(p.payload)) return true;
     }
     return false;
   }
@@ -1337,7 +1438,14 @@ class _OdometerSheetState extends State<_OdometerSheet> {
       // into the simplified Movement type so the dropdown can match.
       final rawType = (entry['entry_type'] ?? entry['entryType'] ?? '')
           .toString();
-      _entryType = rawType.toLowerCase() == 'fuel' ? 'Fuel' : 'Movement';
+      if (rawType.toLowerCase() == 'fuel') {
+        final fillType =
+            (entry['fuel_fill_type'] ?? entry['fuelFillType'] ?? 'full_tank')
+                .toString();
+        _entryType = fillType == 'extra' ? 'ExtraFuel' : 'Fuel';
+      } else {
+        _entryType = 'Movement';
+      }
       _locationCtrl.text = entry['location']?.toString() ?? '';
       _readingCtrl.text =
           (entry['odometer_reading'] ?? entry['odometerReading'] ?? '')
@@ -1411,7 +1519,7 @@ class _OdometerSheetState extends State<_OdometerSheet> {
     if (!_entryFormKey.currentState!.validate()) return;
 
     final payload = <String, dynamic>{
-      'entry_type': _entryType,
+      'entry_type': _isFuelEntry ? 'Fuel' : _entryType,
       'location': _locationCtrl.text.trim(),
       'odometer_reading': int.parse(_readingCtrl.text.trim()),
       'notes': _notesCtrl.text.trim(),
@@ -1419,7 +1527,10 @@ class _OdometerSheetState extends State<_OdometerSheet> {
 
     // Fuel events carry the litres pumped (and optional unit price / station)
     // so we can compute average km/litre over each completed tank cycle.
-    if (_entryType == 'Fuel') {
+    if (_isFuelEntry) {
+      payload['fuel_fill_type'] = _entryType == 'ExtraFuel'
+          ? 'extra'
+          : 'full_tank';
       final liters = double.tryParse(_litersCtrl.text.trim());
       if (liters != null) payload['liters'] = liters;
       final price = double.tryParse(_unitPriceCtrl.text.trim());
@@ -1808,10 +1919,15 @@ class _OdometerSheetState extends State<_OdometerSheet> {
       return fallback;
     }
 
-    String typeOf(Map<String, dynamic> payload) =>
-        (payload['entry_type'] ?? payload['entryType'] ?? 'Movement')
-            .toString()
-            .toLowerCase();
+    String typeOf(Map<String, dynamic> payload) {
+      final type = (payload['entry_type'] ?? payload['entryType'] ?? 'Movement')
+          .toString()
+          .toLowerCase();
+      final fill =
+          (payload['fuel_fill_type'] ?? payload['fuelFillType'] ?? 'full_tank')
+              .toString();
+      return type == 'fuel' && fill == 'extra' ? 'extra_fuel' : type;
+    }
 
     // Normalize both sources into a single list of items we can sort.
     final items = <_TimelineItem>[];
@@ -2164,6 +2280,10 @@ class _OdometerSheetState extends State<_OdometerSheet> {
                               value: 'Fuel',
                               child: Text('Fuel Up (Full Tank)'),
                             ),
+                            DropdownMenuItem(
+                              value: 'ExtraFuel',
+                              child: Text('Extra Fuel (Partial Fill)'),
+                            ),
                           ]
                         : const [
                             // No fuel cycle has been opened yet – lock the
@@ -2178,7 +2298,7 @@ class _OdometerSheetState extends State<_OdometerSheet> {
                       setState(() => _entryType = v);
                     },
                   ),
-                  if (_entryType == 'Fuel') ...[
+                  if (_isFuelEntry) ...[
                     const SizedBox(height: 8),
                     Container(
                       padding: const EdgeInsets.all(10),
@@ -2187,19 +2307,20 @@ class _OdometerSheetState extends State<_OdometerSheet> {
                         border: Border.all(color: const Color(0xFFFDE68A)),
                         borderRadius: BorderRadius.circular(10),
                       ),
-                      child: const Row(
+                      child: Row(
                         children: [
                           Icon(
                             Icons.local_gas_station,
                             size: 16,
                             color: Color(0xFFB45309),
                           ),
-                          SizedBox(width: 8),
+                          const SizedBox(width: 8),
                           Expanded(
                             child: Text(
-                              'Record the odometer BEFORE filling up, then '
-                              'enter litres pumped to a full tank.',
-                              style: TextStyle(
+                              _entryType == 'ExtraFuel'
+                                  ? 'Partial fill: record the mileage, litres added, and price. This will not close the current full-tank cycle.'
+                                  : 'Record the odometer BEFORE filling up, then enter litres pumped to a full tank.',
+                              style: const TextStyle(
                                 fontSize: 12,
                                 color: Color(0xFF92400E),
                               ),
@@ -2213,7 +2334,7 @@ class _OdometerSheetState extends State<_OdometerSheet> {
                   TextFormField(
                     controller: _locationCtrl,
                     decoration: InputDecoration(
-                      labelText: _entryType == 'Fuel'
+                      labelText: _isFuelEntry
                           ? 'Fuel Station / Location'
                           : 'Location / Place Name',
                       prefixIcon: const Icon(Icons.location_on_outlined),
@@ -2285,7 +2406,7 @@ class _OdometerSheetState extends State<_OdometerSheet> {
                       return null;
                     },
                   ),
-                  if (_entryType == 'Fuel') ...[
+                  if (_isFuelEntry) ...[
                     const SizedBox(height: 12),
                     TextFormField(
                       controller: _litersCtrl,
@@ -2297,12 +2418,16 @@ class _OdometerSheetState extends State<_OdometerSheet> {
                           RegExp(r'^\d*\.?\d{0,2}'),
                         ),
                       ],
-                      decoration: const InputDecoration(
-                        labelText: 'Litres Filled (full tank)',
-                        prefixIcon: Icon(Icons.local_gas_station_outlined),
+                      decoration: InputDecoration(
+                        labelText: _entryType == 'ExtraFuel'
+                            ? 'Extra Litres Added'
+                            : 'Litres Filled (full tank)',
+                        prefixIcon: const Icon(
+                          Icons.local_gas_station_outlined,
+                        ),
                       ),
                       validator: (v) {
-                        if (_entryType != 'Fuel') return null;
+                        if (!_isFuelEntry) return null;
                         if (v == null || v.trim().isEmpty) {
                           return 'Litres are required';
                         }
@@ -2481,6 +2606,13 @@ class _OdometerSheetState extends State<_OdometerSheet> {
         '-';
     final notes = entry['notes'] ?? '';
     final entryType = entry['entry_type'] ?? entry['entryType'] ?? 'Movement';
+    final fuelFillType =
+        (entry['fuel_fill_type'] ?? entry['fuelFillType'] ?? 'full_tank')
+            .toString();
+    final entryLabel =
+        entryType.toString().toLowerCase() == 'fuel' && fuelFillType == 'extra'
+        ? 'Extra Fuel'
+        : entryType.toString();
     final remotePhotoUrl = _resolveRemotePhotoUrl(entry);
     final hasPhoto = remotePhotoUrl != null;
 
@@ -2580,7 +2712,7 @@ class _OdometerSheetState extends State<_OdometerSheet> {
               ),
               const SizedBox(height: 4),
               Text(
-                entryType.toString(),
+                entryLabel,
                 style: TextStyle(color: typeColor, fontSize: 10),
               ),
             ],
@@ -2712,6 +2844,12 @@ class _OdometerSheetState extends State<_OdometerSheet> {
     final notes = (p['notes'] ?? '').toString();
     final entryType = (p['entry_type'] ?? p['entryType'] ?? 'Movement')
         .toString();
+    final fuelFillType =
+        (p['fuel_fill_type'] ?? p['fuelFillType'] ?? 'full_tank').toString();
+    final entryLabel =
+        entryType.toLowerCase() == 'fuel' && fuelFillType == 'extra'
+        ? 'Extra Fuel'
+        : entryType;
     final localPhotoPath = (p['photo_path'] is String)
         ? (p['photo_path'] as String)
         : null;
@@ -2797,7 +2935,7 @@ class _OdometerSheetState extends State<_OdometerSheet> {
               ),
               const SizedBox(height: 4),
               Text(
-                '$entryType · ${failed ? 'Failed' : 'Pending'}',
+                '$entryLabel · ${failed ? 'Failed' : 'Pending'}',
                 style: TextStyle(color: color, fontSize: 10),
               ),
             ],

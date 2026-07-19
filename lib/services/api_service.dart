@@ -738,13 +738,21 @@ class ApiService {
 
   // ── Odometer logs ───────────────────────────────────────────────────────────
   static Future<List<dynamic>> fetchOdometerLogs(dynamic tripId) async =>
-      fetchList('/trips/$tripId/odometer-logs');
+      fetchList(_odometerPath(tripId));
+
+  static String _odometerPath(dynamic tripId) {
+    final raw = tripId.toString();
+    if (raw.startsWith('lease:')) {
+      return '/lease-trips/${raw.substring('lease:'.length)}/odometer-logs';
+    }
+    return '/trips/$raw/odometer-logs';
+  }
 
   static Future<Map<String, dynamic>> createOdometerLog(
     dynamic tripId,
     Map<String, dynamic> payload,
   ) async {
-    final data = await post('/trips/$tripId/odometer-logs', payload);
+    final data = await post(_odometerPath(tripId), payload);
     if (data is Map<String, dynamic>) return data;
     if (data is Map) return Map<String, dynamic>.from(data);
     return <String, dynamic>{};
@@ -766,7 +774,7 @@ class ApiService {
     });
 
     final data = await postMultipart(
-      '/trips/$tripId/odometer-logs',
+      _odometerPath(tripId),
       fields: fields,
       fileField: photoField,
       filePath: photoPath,
